@@ -14,14 +14,14 @@ Script này giúp bạn thiết lập một GitHub self-hosted runner trên Ubun
 ### 1. Chạy Lần Đầu
 Chạy lệnh sau để cài đặt runner:
 ```bash
-bash <(curl -sL https://raw.githubusercontent.com/ynguyengravity/setup-github-runner/master/setup.sh) <RUNNER_ID> <GITHUB_TOKEN>
+sudo su -c "curl -sL https://raw.githubusercontent.com/your-repo/setup-github-runner/main/setup.sh | bash -s <RUNNER_ID> <GITHUB_TOKEN>"
 ```
 Thay `your-repo` bằng repository chứa script, `<RUNNER_ID>` bằng ID runner mong muốn, và `<GITHUB_TOKEN>` bằng token GitHub hợp lệ.
 
 ### 2. Chạy Lại (Bắt Buộc)
 Nếu runner đã được cài đặt trước đó và bạn muốn chạy lại script, hãy thêm tham số `force`:
 ```bash
-bash <(curl -sL https://raw.githubusercontent.com/ynguyengravity/setup-github-runner/master/setup.sh) <RUNNER_ID> <GITHUB_TOKEN> force
+sudo su -c "curl -sL https://raw.githubusercontent.com/your-repo/setup-github-runner/main/setup.sh | bash -s <RUNNER_ID> <GITHUB_TOKEN> force"
 ```
 
 ## Các Thành Phần Của Script
@@ -56,4 +56,3 @@ bash <(curl -sL https://raw.githubusercontent.com/ynguyengravity/setup-github-ru
 
 ## Liên Hệ & Hỗ Trợ
 Nếu gặp vấn đề, hãy mở issue trên repository GitHub chứa script hoặc kiểm tra log để tìm lỗi.
-
