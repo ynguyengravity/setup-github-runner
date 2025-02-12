@@ -3,7 +3,7 @@
 set -e
 
 LOCK_FILE="/tmp/github-runner-setup.lock"
-FORCE_RUN=$3
+FORCE_RUN=$2
 LOG_FILE="/var/log/github-runner-setup.log"
 
 exec > >(tee -a "$LOG_FILE") 2>&1
