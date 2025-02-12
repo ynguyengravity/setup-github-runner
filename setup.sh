@@ -19,13 +19,14 @@ touch "$LOCK_FILE"
 
 echo "[INFO] Nhận tham số đầu vào..."
 RUNNER_ID=$1
-GITHUB_TOKEN=$2
+# REG_TOKEN=$2
+REG_TOKEN="BBG5IMTYJCQXTBCD246RCHDHVTFTC"
 if [ -z "$RUNNER_ID" ]; then
     echo "[ERROR] RUNNER_ID không được để trống. Hãy cung cấp một ID."
     exit 1
 fi
-if [ -z "$GITHUB_TOKEN" ]; then
-    echo "[ERROR] GITHUB_TOKEN không được để trống. Hãy cung cấp một token hợp lệ."
+if [ -z "$REG_TOKEN" ]; then
+    echo "[ERROR] REG_TOKEN không được để trống. Hãy cung cấp một token hợp lệ."
     exit 1
 fi
 
@@ -67,21 +68,21 @@ tar xzf ./actions-runner-linux-x64.tar.gz
 rm actions-runner-linux-x64.tar.gz
 
 # Lấy token đăng ký runner với retry
-echo "[INFO] Lấy token đăng ký runner..."
-for i in {1..5}; do
-    REG_TOKEN=$(curl -sX POST -H "Authorization: token $GITHUB_TOKEN" \
-        https://api.github.com/repos/$GITHUB_OWNER/actions/runners/registration-token | jq -r .token)
-    if [ -n "$REG_TOKEN" ] && [ "$REG_TOKEN" != "null" ]; then
-        break
-    fi
-    echo "[WARNING] Thử lại lấy token... ($i)"
-    sleep 5
-done
+# echo "[INFO] Lấy token đăng ký runner..."
+# for i in {1..5}; do
+#     REG_TOKEN=$(curl -sX POST -H "Authorization: token $GITHUB_TOKEN" \
+#         https://api.github.com/repos/$GITHUB_OWNER/actions/runners/registration-token | jq -r .token)
+#     if [ -n "$REG_TOKEN" ] && [ "$REG_TOKEN" != "null" ]; then
+#         break
+#     fi
+#     echo "[WARNING] Thử lại lấy token... ($i)"
+#     sleep 5
+# done
 
-if [ -z "$REG_TOKEN" ] || [ "$REG_TOKEN" == "null" ]; then
-    echo "[ERROR] Không thể lấy token đăng ký runner. Kiểm tra lại GITHUB_TOKEN."
-    exit 1
-fi
+# if [ -z "$REG_TOKEN" ] || [ "$REG_TOKEN" == "null" ]; then
+#     echo "[ERROR] Không thể lấy token đăng ký runner. Kiểm tra lại GITHUB_TOKEN."
+#     exit 1
+# fi
 
 # Đăng ký runner
 echo "[INFO] Đăng ký runner..."
