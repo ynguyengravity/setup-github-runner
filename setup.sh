@@ -32,7 +32,7 @@ fi
 IP_ADDRESS=$(hostname -I | awk '{print $1}')
 GITHUB_OWNER="your-org-or-user"
 RUNNER_NAME="runner-$RUNNER_ID-$IP_ADDRESS"
-LABELS="self-hosted,linux,x64"
+LABELS="test-setup,linux,x64"
 
 # Cập nhật hệ thống
 echo "[INFO] Cập nhật hệ thống..."
