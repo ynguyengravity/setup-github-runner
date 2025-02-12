@@ -30,7 +30,7 @@ if [ -z "$GITHUB_TOKEN" ]; then
 fi
 
 IP_ADDRESS=$(hostname -I | awk '{print $1}')
-GITHUB_OWNER="your-org-or-user"
+GITHUB_OWNER="Gravity-Global"
 RUNNER_NAME="runner-$RUNNER_ID-$IP_ADDRESS"
 LABELS="test-setup,linux,x64"
 
