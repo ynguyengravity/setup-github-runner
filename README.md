@@ -16,6 +16,7 @@ Script này giúp bạn thiết lập một GitHub self-hosted runner trên Ubun
 rm setup.sh
 wget -O setup.sh https://raw.githubusercontent.com/ynguyengravity/setup-github-runner/master/setup.sh
 chmod +x setup.sh
+./setup.sh test force
 ```
 
 ### 2. Chạy Script
