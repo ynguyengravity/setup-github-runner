@@ -16,6 +16,20 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 
 echo "[INFO] Bắt đầu script cài đặt GitHub Runner..."
 
+# Setup workspace directories
+echo "[INFO] Setting up workspace directories..."
+WORKSPACE_BASE="/home/$USER/actions-runner/_work"
+sudo mkdir -p "$WORKSPACE_BASE"
+sudo mkdir -p "$WORKSPACE_BASE/_temp"
+sudo chown -R $USER:$USER "$WORKSPACE_BASE"
+sudo chmod -R 755 "$WORKSPACE_BASE"
+
+# Ensure Git has correct permissions
+echo "[INFO] Configuring Git..."
+git config --global --add safe.directory "*"
+git config --global core.fileMode false
+git config --global core.longpaths true
+
 if [ -f "$LOCK_FILE" ] && [ "$FORCE_RUN" != "force" ]; then
     echo "[ERROR] Script đã được chạy trước đó. Nếu muốn chạy lại, hãy thêm tham số 'force'."
     exit 1
@@ -131,3 +145,10 @@ echo "- Python version: $(python3 --version)"
 echo "- Node.js version: $(node --version)"
 echo "- NPM version: $(npm --version)"
 echo "- Git version: $(git --version)"
+
+# After installing runner service, ensure workspace permissions again
+echo "[INFO] Final workspace permissions check..."
+sudo chown -R $USER:$USER "$WORKSPACE_BASE"
+sudo chmod -R 755 "$WORKSPACE_BASE"
+find "$WORKSPACE_BASE" -type d -exec chmod 755 {} \;
+find "$WORKSPACE_BASE" -type f -exec chmod 644 {} \;

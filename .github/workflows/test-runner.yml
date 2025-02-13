@@ -9,7 +9,51 @@ jobs:
   test-permissions:
     runs-on: test-setup  # Chạy trên self-hosted runner
     steps:
-      - nam      - name: Chf: always()
+      - name: Clean Workspace
+        if: always()
+        run: |
+          echo "=== Cleaning Workspace ==="
+          WORKSPACE="/home/test/actions-runner/_work/gravity-sync-s3-report"
+          
+          # Force remove with sudo if exists
+          if [ -d "$WORKSPACE" ]; then
+            sudo rm -rf "$WORKSPACE"
+          fi
+          
+          # Create fresh directory with correct permissions
+          sudo mkdir -p "$WORKSPACE"
+          sudo chown -R test:test "$WORKSPACE"
+          sudo chmod -R 755 "$WORKSPACE"
+          
+          # Also clean temp directory
+          sudo rm -rf /home/test/actions-runner/_work/_temp/*
+          sudo mkdir -p /home/test/actions-runner/_work/_temp
+          sudo chown -R test:test /home/test/actions-runner/_work/_temp
+
+      - name: Checkout code
+        if: always()
+        uses: actions/checkout@v2
+
+      - name: Fix Git Permissions
+        if: always()
+        run: |
+          echo "=== Fixing Git Permissions ==="
+          # Set ownership
+          sudo chown -R test:test .
+          sudo chown -R test:test ./.git
+          
+          # Set directory permissions
+          sudo find . -type d -exec chmod 755 {} \;
+          # Set file permissions
+          sudo find . -type f -exec chmod 644 {} \;
+          # Make scripts executable
+          sudo find . -name "*.sh" -exec chmod +x {} \;
+          
+          # Configure Git
+          git config --global --add safe.directory "*"
+          git config --global core.fileMode false
+
+      - name: Chf: always()
         uses: actions/checkout@v2
 
         if: always()
