@@ -14,7 +14,16 @@ MAINTENANCE_SCRIPT="${RUNNER_DIR}/maintenance.sh"
 log_message() {
     local level="$1"
     local message="$2"
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$level] $message" | tee -a "$LOG_FILE"
+    local log_time="[$(date '+%Y-%m-%d %H:%M:%S')]"
+    local log_entry="$log_time [$level] $message"
+    
+    # Always print to stdout
+    echo "$log_entry"
+    
+    # Try to log to file if we have permission
+    if [ -w "$LOG_FILE" ] || [ -w "$(dirname "$LOG_FILE")" ]; then
+        echo "$log_entry" >> "$LOG_FILE"
+    fi
 }
 
 generate_random_string() {
@@ -38,10 +47,16 @@ check_prerequisites() {
     
     # Check if script is run with sudo
     if [ "$EUID" -eq 0 ]; then
-        if [ -z "$SUDO_USER" ]; then
-            log_message "ERROR" "Please run without sudo, the script will ask for sudo when needed"
-            exit 1
-        fi
+        echo "ERROR: Please run without sudo, the script will ask for sudo when needed"
+        exit 1
+    fi
+    
+    # Create log directory with sudo
+    if [ ! -f "$LOG_FILE" ]; then
+        sudo mkdir -p "$(dirname "$LOG_FILE")"
+        sudo touch "$LOG_FILE"
+        sudo chown "$USER:$USER" "$LOG_FILE"
+        sudo chmod 644 "$LOG_FILE"
     fi
     
     # Check required parameters
@@ -60,10 +75,12 @@ check_prerequisites() {
 setup_directories() {
     log_message "INFO" "Setting up directories..."
     
-    # Create and set permissions for log files
-    sudo mkdir -p "$(dirname "$LOG_FILE")"
-    sudo touch "$LOG_FILE" "$LOCK_FILE"
-    sudo chown "$USER:$USER" "$LOG_FILE" "$LOCK_FILE"
+    # Create lock file with sudo if needed
+    if [ ! -f "$LOCK_FILE" ]; then
+        sudo touch "$LOCK_FILE"
+        sudo chown "$USER:$USER" "$LOCK_FILE"
+        sudo chmod 644 "$LOCK_FILE"
+    fi
     
     # Create runner directories
     sudo mkdir -p "$RUNNER_DIR" "$WORKSPACE_BASE" "${WORKSPACE_BASE}/_temp"
