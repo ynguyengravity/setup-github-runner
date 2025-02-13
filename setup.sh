@@ -38,6 +38,7 @@ IP_ADDRESS=$(hostname -I | awk '{print $1}')
 GITHUB_OWNER="Gravity-Global"
 RUNNER_NAME="runner-$RUNNER_ID-$IP_ADDRESS"
 LABELS="test-setup,linux,x64"
+SERVICE_NAME="actions.runner.$GITHUB_OWNER.$RUNNER_NAME"
 
 # Cập nhật hệ thống
 echo "[INFO] Cập nhật hệ thống..."
@@ -86,6 +87,6 @@ sudo ./svc.sh start
 
 # Kiểm tra trạng thái runner
 echo "[INFO] Kiểm tra trạng thái runner..."
-sudo systemctl status actions.runner || echo "[WARNING] Runner có thể chưa hoạt động đúng. Hãy kiểm tra lại."
+sudo systemctl status $SERVICE_NAME || echo "[WARNING] Runner có thể chưa hoạt động đúng. Hãy kiểm tra lại."
 
 echo "[INFO] GitHub Runner đã được cài đặt thành công và đang chạy với tên $RUNNER_NAME!"

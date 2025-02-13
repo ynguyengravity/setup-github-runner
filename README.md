@@ -12,7 +12,7 @@ Script này giúp bạn thiết lập một GitHub self-hosted runner trên Ubun
 
 ### 1. Tải Script
 ```bash
-wget https://raw.githubusercontent.com/ynguyengravity/setup-github-runner/master/setup.sh
+wget -O setup.sh https://raw.githubusercontent.com/ynguyengravity/setup-github-runner/master/setup.sh
 chmod +x setup.sh
 ```
 
