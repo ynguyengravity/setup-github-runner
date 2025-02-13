@@ -7,36 +7,45 @@ Script này giúp bạn thiết lập một GitHub self-hosted runner trên Ubun
 - Ubuntu Server 20.04 hoặc mới hơn
 - Kết nối Internet
 - Tài khoản có quyền `sudo`
-- Token GitHub có quyền `repo` và `actions:read/write`
 
 ## Cách Chạy Script
 
-### 1. Chạy Lần Đầu
-Chạy lệnh sau để cài đặt runner:
+### 1. Tải Script
 ```bash
-sudo su -c "curl -sL https://raw.githubusercontent.com/your-repo/setup-github-runner/main/setup.sh | bash -s <RUNNER_ID> <GITHUB_TOKEN>"
+wget https://raw.githubusercontent.com/ynguyengravity/setup-github-runner/master/setup.sh
+chmod +x setup.sh
 ```
-Thay `your-repo` bằng repository chứa script, `<RUNNER_ID>` bằng ID runner mong muốn, và `<GITHUB_TOKEN>` bằng token GitHub hợp lệ.
 
-### 2. Chạy Lại (Bắt Buộc)
+### 2. Chạy Script
+```bash
+./setup.sh <RUNNER_ID>
+```
+Thay `<RUNNER_ID>` bằng ID runner mong muốn.
+
+### 3. Chạy Lại (Nếu Cần)
 Nếu runner đã được cài đặt trước đó và bạn muốn chạy lại script, hãy thêm tham số `force`:
 ```bash
-sudo su -c "curl -sL https://raw.githubusercontent.com/your-repo/setup-github-runner/main/setup.sh | bash -s <RUNNER_ID> <GITHUB_TOKEN> force"
+./setup.sh <RUNNER_ID> force
 ```
 
 ## Các Thành Phần Của Script
 - **Cập nhật hệ thống**: Cập nhật và dọn dẹp hệ thống Ubuntu
 - **Cài đặt Docker**: Cài đặt Docker nếu chưa có và cấp quyền cho user
 - **Cấu hình sudo không cần mật khẩu**: Giúp runner có thể chạy mà không cần nhập mật khẩu sudo
-- **Tải và cài đặt GitHub Runner**: Tải xuống runner từ GitHub, giải nén và cấu hình
-- **Đăng ký runner với GitHub**: Tự động lấy token và đăng ký runner
+- **Tải và cài đặt GitHub Runner**: Tải xuống runner từ GitHub (phiên bản 2.322.0), giải nén và cấu hình
+- **Đăng ký runner với GitHub**: Tự động đăng ký runner với token được cấu hình sẵn
 - **Cài đặt runner như một service**: Giúp runner tự động chạy khi hệ thống khởi động
 - **Kiểm tra trạng thái runner**: Kiểm tra xem runner có hoạt động đúng hay không
+
+## Cấu Hình Runner
+- **Tên Runner**: `runner-<RUNNER_ID>-<IP_ADDRESS>`
+- **Labels**: `test-setup,linux,x64`
+- **Repository**: ynguyengravity/setup-github-runner
 
 ## Xử Lý Sự Cố
 1. **Kiểm tra log cài đặt**:
    ```bash
-   cat /var/log/github-runner-setup.log
+   sudo cat /var/log/github-runner-setup.log
    ```
 2. **Kiểm tra trạng thái runner**:
    ```bash
@@ -51,8 +60,10 @@ sudo su -c "curl -sL https://raw.githubusercontent.com/your-repo/setup-github-ru
    Sau đó, chạy lại script với tham số `force`.
 
 ## Ghi Chú
-- Token GitHub chỉ có hiệu lực trong một khoảng thời gian ngắn, nếu script thất bại khi lấy token, hãy tạo token mới.
-- Đảm bảo server của bạn có kết nối Internet để tải xuống các thành phần cần thiết.
+- Script sử dụng một token cố định được cấu hình sẵn trong mã nguồn
+- Đảm bảo server của bạn có kết nối Internet để tải xuống các thành phần cần thiết
+- Lock file được tạo tại `/tmp/github-runner-setup.lock` để tránh chạy trùng lặp
+- Script sẽ tự động yêu cầu quyền sudo khi cần thiết
 
 ## Liên Hệ & Hỗ Trợ
-Nếu gặp vấn đề, hãy mở issue trên repository GitHub chứa script hoặc kiểm tra log để tìm lỗi.
+Nếu gặp vấn đề, hãy mở issue trên repository GitHub hoặc kiểm tra log tại `/var/log/github-runner-setup.log` để tìm lỗi.

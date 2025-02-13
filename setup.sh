@@ -6,6 +6,12 @@ LOCK_FILE="/tmp/github-runner-setup.lock"
 FORCE_RUN=$2
 LOG_FILE="/var/log/github-runner-setup.log"
 
+# Tạo và set quyền cho log file và lock file
+sudo touch "$LOG_FILE"
+sudo chown $USER:$USER "$LOG_FILE"
+sudo touch "$LOCK_FILE"
+sudo chown $USER:$USER "$LOCK_FILE"
+
 exec > >(tee -a "$LOG_FILE") 2>&1
 
 echo "[INFO] Bắt đầu script cài đặt GitHub Runner..."
@@ -14,8 +20,6 @@ if [ -f "$LOCK_FILE" ] && [ "$FORCE_RUN" != "force" ]; then
     echo "[ERROR] Script đã được chạy trước đó. Nếu muốn chạy lại, hãy thêm tham số 'force'."
     exit 1
 fi
-
-touch "$LOCK_FILE"
 
 echo "[INFO] Nhận tham số đầu vào..."
 RUNNER_ID=$1
@@ -60,29 +64,16 @@ if ! sudo grep -q "$USER ALL=(ALL) NOPASSWD:ALL" /etc/sudoers; then
     echo "$USER ALL=(ALL) NOPASSWD:ALL" | sudo tee -a /etc/sudoers
 fi
 
+# Tạo thư mục actions-runner với quyền user hiện tại
+echo "[INFO] Tạo thư mục actions-runner..."
+mkdir -p ~/actions-runner
+cd ~/actions-runner
+
 # Cài đặt runner
 echo "[INFO] Tải và cài đặt GitHub Runner..."
-mkdir -p ~/actions-runner && cd ~/actions-runner
 curl -o actions-runner-linux-x64.tar.gz -L https://github.com/actions/runner/releases/download/v2.322.0/actions-runner-linux-x64-2.322.0.tar.gz
 tar xzf ./actions-runner-linux-x64.tar.gz
 rm actions-runner-linux-x64.tar.gz
-
-# Lấy token đăng ký runner với retry
-# echo "[INFO] Lấy token đăng ký runner..."
-# for i in {1..5}; do
-#     REG_TOKEN=$(curl -sX POST -H "Authorization: token $GITHUB_TOKEN" \
-#         https://api.github.com/repos/$GITHUB_OWNER/actions/runners/registration-token | jq -r .token)
-#     if [ -n "$REG_TOKEN" ] && [ "$REG_TOKEN" != "null" ]; then
-#         break
-#     fi
-#     echo "[WARNING] Thử lại lấy token... ($i)"
-#     sleep 5
-# done
-
-# if [ -z "$REG_TOKEN" ] || [ "$REG_TOKEN" == "null" ]; then
-#     echo "[ERROR] Không thể lấy token đăng ký runner. Kiểm tra lại GITHUB_TOKEN."
-#     exit 1
-# fi
 
 # Đăng ký runner
 echo "[INFO] Đăng ký runner..."
@@ -95,6 +86,6 @@ sudo ./svc.sh start
 
 # Kiểm tra trạng thái runner
 echo "[INFO] Kiểm tra trạng thái runner..."
-systemctl status actions.runner || echo "[WARNING] Runner có thể chưa hoạt động đúng. Hãy kiểm tra lại."
+sudo systemctl status actions.runner || echo "[WARNING] Runner có thể chưa hoạt động đúng. Hãy kiểm tra lại."
 
 echo "[INFO] GitHub Runner đã được cài đặt thành công và đang chạy với tên $RUNNER_NAME!"
