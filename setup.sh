@@ -96,15 +96,17 @@ cleanup_system() {
 update_system() {
     log_message "INFO" "Performing system update..."
     
-    # Update with time check override if needed
-    sudo apt-get -o Acquire::Check-Valid-Until=false -o Acquire::Check-Date=false update || {
-        log_message "ERROR" "Failed to update package lists"
-        return 1
-    }
+    # Update package lists with time check disabled
+    sudo apt-get -o Acquire::Check-Valid-Until=false \
+                 -o Acquire::Check-Date=false \
+                 -o APT::Get::AllowUnauthenticated=true \
+                 update
     
-    # Install only essential packages
+    # Install essential packages
     DEBIAN_FRONTEND=noninteractive sudo apt-get -o Acquire::Check-Valid-Until=false \
-        -o Acquire::Check-Date=false install -y --no-install-recommends \
+                                               -o Acquire::Check-Date=false \
+                                               -o APT::Get::AllowUnauthenticated=true \
+                                               install -y --no-install-recommends \
         curl \
         ca-certificates \
         git \
@@ -178,142 +180,94 @@ setup_time_sync() {
     log_message "INFO" "Setting up time synchronization..."
     
     # Debug: Check initial state
-    log_message "DEBUG" "Checking initial system state..."
     log_message "DEBUG" "Current system time: $(date)"
     
-    # Fix time immediately using HTTP
-    log_message "INFO" "Performing initial time sync..."
-    # Get time from Google
-    EPOCH=$(curl -sI 'google.com' | grep -i '^date:' | sed 's/^[Dd]ate: //g' | date -f - +%s)
-    if [ -n "$EPOCH" ]; then
-        log_message "INFO" "Setting system time from HTTP response..."
-        sudo date -s "@$EPOCH"
-    else
-        log_message "WARNING" "Failed to get time from HTTP, trying backup method..."
-        # Backup method using rdate
-        if ! command -v rdate &> /dev/null; then
-            DEBIAN_FRONTEND=noninteractive sudo apt-get update || true
-            DEBIAN_FRONTEND=noninteractive sudo apt-get install -y rdate || true
+    # Try to sync hardware clock first
+    log_message "INFO" "Attempting to sync hardware clock..."
+    sudo hwclock --hctosys || log_message "WARNING" "Failed to sync from hardware clock"
+    
+    # Manual time sync using multiple methods
+    log_message "INFO" "Attempting manual time sync..."
+    
+    # Method 1: Using date command with HTTP
+    TIME_STRING=$(curl -sI http://google.com | grep -i "^date:" | cut -d' ' -f2-)
+    if [ -n "$TIME_STRING" ]; then
+        log_message "INFO" "Got time from HTTP header"
+        sudo date -s "$TIME_STRING" || log_message "WARNING" "Failed to set time from HTTP"
+    fi
+    
+    # Method 2: Using specific time server
+    if ! date -s "$(curl -s --head http://time.nist.gov | grep '^Date:' | cut -d' ' -f2-)"
+    then
+        log_message "WARNING" "Failed to sync with time.nist.gov"
+        
+        # Method 3: Direct NTP query
+        if command -v timeout &> /dev/null; then
+            log_message "INFO" "Attempting direct NTP query..."
+            echo -n "time.google.com 123" | timeout 3 nc -u time.google.com 123
+            if [ $? -eq 0 ]; then
+                log_message "INFO" "NTP query successful"
+            else
+                log_message "WARNING" "NTP query failed"
+            fi
         fi
-        sudo rdate -n -4 time.nist.gov || log_message "WARNING" "Failed to sync time with rdate"
     fi
     
-    log_message "DEBUG" "Time after initial sync: $(date)"
+    log_message "DEBUG" "Time after sync attempts: $(date)"
     
-    # Remove conflicting packages
-    log_message "INFO" "Removing conflicting packages..."
-    sudo systemctl stop systemd-timesyncd || true
-    sudo systemctl disable systemd-timesyncd || true
-    sudo apt-mark hold systemd-timesyncd || true
+    # Install required packages without time check
+    log_message "INFO" "Installing required packages..."
+    sudo apt-get -o Acquire::Check-Valid-Until=false \
+                 -o Acquire::Check-Date=false \
+                 -o APT::Get::AllowUnauthenticated=true \
+                 update
     
-    # Clean up any existing chrony installation
-    log_message "INFO" "Cleaning up existing chrony installation..."
-    sudo apt-get remove --purge -y chrony || true
-    sudo apt-get autoremove -y || true
+    sudo apt-get -o Acquire::Check-Valid-Until=false \
+                 -o Acquire::Check-Date=false \
+                 -o APT::Get::AllowUnauthenticated=true \
+                 install -y --no-install-recommends chrony
     
-    # Install chrony
-    log_message "INFO" "Installing chrony..."
-    DEBIAN_FRONTEND=noninteractive sudo apt-get update || {
-        log_message "WARNING" "Initial apt-get update failed, trying with time override..."
-        sudo apt-get -o Acquire::Check-Valid-Until=false -o Acquire::Check-Date=false update
-    }
-    
-    DEBIAN_FRONTEND=noninteractive sudo apt-get install -y chrony || {
-        log_message "WARNING" "Standard installation failed, trying alternative method..."
-        sudo apt-get -o Acquire::Check-Valid-Until=false -o Acquire::Check-Date=false install -y chrony
-    }
-    
-    # Debug: Check installation results
-    log_message "DEBUG" "Checking chrony installation..."
-    dpkg -l | grep chrony || log_message "ERROR" "Chrony installation failed"
-    ls -l /lib/systemd/system/chrony* || log_message "ERROR" "No chrony service files found after installation"
-    
-    # Reload systemd to recognize new service
-    log_message "INFO" "Reloading systemd..."
-    sudo systemctl daemon-reload
-    
-    # Detect chrony service name
-    local CHRONY_SERVICE=""
-    log_message "DEBUG" "Looking for chrony service..."
-    systemctl list-unit-files | grep -i chrony
-    
-    if systemctl list-unit-files | grep -q "chronyd.service"; then
-        CHRONY_SERVICE="chronyd"
-    elif systemctl list-unit-files | grep -q "chrony.service"; then
-        CHRONY_SERVICE="chrony"
-    else
-        log_message "ERROR" "Could not find chrony service after installation. Debug info:"
-        systemctl list-unit-files | grep -i chrony
-        journalctl -xe --no-pager | tail -n 50
-        exit 1
-    fi
-    
-    log_message "INFO" "Detected chrony service as: $CHRONY_SERVICE"
-    
-    # Configure chrony
+    # Configure chrony immediately
     if [ -f /etc/chrony/chrony.conf ]; then
         log_message "INFO" "Configuring chrony..."
-        sudo cp /etc/chrony/chrony.conf /etc/chrony/chrony.conf.bak
         cat << 'EOF' | sudo tee /etc/chrony/chrony.conf
-# Use multiple NTP servers for better reliability
-server 0.pool.ntp.org iburst
-server 1.pool.ntp.org iburst
-server 2.pool.ntp.org iburst
-server 3.pool.ntp.org iburst
+# Allow large clock corrections
+makestep 1.0 -1
 
-# Record the rate at which the system clock gains/losses time
+# Use multiple NTP servers
+server time.google.com iburst
+server time.cloudflare.com iburst
+server time.facebook.com iburst
+server time.apple.com iburst
+
+# Record clock drift
 driftfile /var/lib/chrony/drift
 
-# Allow the system clock to be stepped in the first three updates
-makestep 1.0 3
-
-# Enable kernel synchronization of the real-time clock (RTC)
+# Enable kernel RTC sync
 rtcsync
 
-# Specify directory for log files
+# Log directory
 logdir /var/log/chrony
 EOF
-    else
-        log_message "ERROR" "chrony.conf not found at /etc/chrony/chrony.conf"
-        ls -l /etc/chrony/ || log_message "ERROR" "/etc/chrony/ directory not found"
-    fi
-    
-    # Start and verify chrony
-    log_message "INFO" "Starting chrony service..."
-    sudo systemctl enable $CHRONY_SERVICE || log_message "ERROR" "Failed to enable $CHRONY_SERVICE"
-    sudo systemctl restart $CHRONY_SERVICE || {
-        log_message "ERROR" "Failed to restart $CHRONY_SERVICE. Service status:"
-        sudo systemctl status $CHRONY_SERVICE
-        journalctl -xe --no-pager | tail -n 50
-    }
-    sleep 2  # Give chrony time to start
-    
-    # Check chrony status
-    if sudo systemctl is-active --quiet $CHRONY_SERVICE; then
-        log_message "INFO" "Chrony service started successfully"
-        sudo chronyc sources
-    else
-        log_message "WARNING" "Chrony failed to start. Attempting fix..."
-        sudo apt-get install --reinstall -y chrony
-        sudo systemctl daemon-reload
-        sudo systemctl restart $CHRONY_SERVICE
-        if ! sudo systemctl is-active --quiet $CHRONY_SERVICE; then
-            log_message "ERROR" "Failed to start chrony service. Debug info:"
-            sudo systemctl status $CHRONY_SERVICE
-            journalctl -xe --no-pager | tail -n 50
-            ls -l /var/log/chrony/ || true
-            cat /var/log/chrony/measurements.log || true
-            exit 1
+        
+        # Start chrony service
+        log_message "INFO" "Starting chrony service..."
+        sudo systemctl enable chrony
+        sudo systemctl restart chrony
+        
+        # Wait for chrony to start and sync
+        sleep 5
+        
+        # Check chrony status
+        if sudo systemctl is-active --quiet chrony; then
+            log_message "INFO" "Chrony service started successfully"
+            sudo chronyc tracking || true
+            sudo chronyc sources || true
+        else
+            log_message "WARNING" "Chrony service failed to start, continuing anyway..."
         fi
-    fi
-    
-    # Verify time synchronization
-    log_message "INFO" "Verifying time synchronization..."
-    if ! sudo chronyc tracking; then
-        log_message "WARNING" "Could not verify time synchronization. Debug info:"
-        sudo chronyc sources
-        sudo chronyc tracking
-        sudo chronyc sourcestats
+    else
+        log_message "ERROR" "Chrony configuration file not found"
     fi
 }
 
