@@ -191,6 +191,19 @@ setup_time_sync() {
     DEBIAN_FRONTEND=noninteractive sudo apt-get update
     DEBIAN_FRONTEND=noninteractive sudo apt-get install -y chrony
     
+    # Detect chrony service name
+    local CHRONY_SERVICE=""
+    if systemctl list-unit-files | grep -q "chronyd.service"; then
+        CHRONY_SERVICE="chronyd"
+    elif systemctl list-unit-files | grep -q "chrony.service"; then
+        CHRONY_SERVICE="chrony"
+    else
+        log_message "ERROR" "Could not find chrony service after installation"
+        exit 1
+    fi
+    
+    log_message "INFO" "Detected chrony service as: $CHRONY_SERVICE"
+    
     # Configure chrony
     if [ -f /etc/chrony/chrony.conf ]; then
         sudo cp /etc/chrony/chrony.conf /etc/chrony/chrony.conf.bak
@@ -217,22 +230,29 @@ EOF
     
     # Start and verify chrony
     log_message "INFO" "Starting chrony service..."
-    sudo systemctl enable chronyd
-    sudo systemctl restart chronyd
-    sleep 2  # Give chronyd time to start
+    sudo systemctl enable $CHRONY_SERVICE
+    sudo systemctl restart $CHRONY_SERVICE
+    sleep 2  # Give chrony time to start
     
     # Check chrony status
-    if sudo systemctl is-active --quiet chronyd; then
+    if sudo systemctl is-active --quiet $CHRONY_SERVICE; then
         log_message "INFO" "Chrony service started successfully"
         sudo chronyc sources
     else
         log_message "WARNING" "Chrony failed to start. Attempting fix..."
         sudo apt-get install --reinstall -y chrony
-        sudo systemctl restart chronyd
-        if ! sudo systemctl is-active --quiet chronyd; then
-            log_message "ERROR" "Failed to start chrony service"
+        sudo systemctl restart $CHRONY_SERVICE
+        if ! sudo systemctl is-active --quiet $CHRONY_SERVICE; then
+            log_message "ERROR" "Failed to start chrony service. Service status:"
+            sudo systemctl status $CHRONY_SERVICE
             exit 1
         fi
+    fi
+    
+    # Verify time synchronization
+    log_message "INFO" "Verifying time synchronization..."
+    if ! sudo chronyc tracking; then
+        log_message "WARNING" "Could not verify time synchronization"
     fi
 }
 
