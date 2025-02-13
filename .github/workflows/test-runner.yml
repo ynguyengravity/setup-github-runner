@@ -1,0 +1,167 @@
+name: Test Runner Permissions
+
+on:
+  workflow_dispatch:  # Cho phép chạy thủ công từ GitHub UI
+  push:
+    branches: [ master, main ]  # Chạy khi push vào master hoặc main
+
+jobs:
+  test-permissions:
+    runs-on: self-hosted  # Chạy trên self-hosted runner
+    steps:
+      - name: Checkout code
+        if: always()
+        uses: actions/checkout@v2
+
+      - name: Test User Info and Groups
+        if: always()
+        run: |
+          echo "=== Testing User Info ==="
+          whoami
+          groups
+          id
+          
+          echo -e "\nChecking required groups:"
+          for group in docker adm users systemd-journal; do
+            if groups | grep -q "\b$group\b"; then
+              echo "✓ Found group: $group"
+            else
+              echo "✗ Missing group: $group"
+              exit 1
+            fi
+          done
+
+      - name: Test Sudo Access
+        if: always()
+        run: |
+          echo "=== Testing Sudo Access ==="
+          sudo whoami
+          sudo docker ps
+          # Test NOPASSWD sudo
+          sudo -n true && echo "✓ NOPASSWD sudo works" || echo "✗ NOPASSWD sudo not configured"
+
+      - name: Test Directory Permissions
+        if: always()
+        run: |
+          echo "=== Testing Directory Permissions ==="
+          echo "Testing /usr/local directories:"
+          ls -la /usr/local/aws-cli || echo "AWS CLI directory not found"
+          ls -la /usr/local/bin
+          
+          echo -e "\nTesting write permissions:"
+          for dir in "/usr/local/bin" "/usr/local/aws-cli"; do
+            if [ -w "$dir" ]; then
+              echo "✓ Can write to $dir"
+              touch "$dir/test" && rm "$dir/test" && echo "  ✓ File creation test passed"
+            else
+              echo "✗ Cannot write to $dir"
+              exit 1
+            fi
+          done
+
+      - name: Test Docker Access
+        if: always()
+        run: |
+          echo "=== Testing Docker Access ==="
+          echo "1. Testing basic Docker commands:"
+          docker ps
+          docker images
+          
+          echo -e "\n2. Testing Docker socket access:"
+          ls -l /var/run/docker.sock
+          if [ -w "/var/run/docker.sock" ]; then
+            echo "✓ Can access Docker socket"
+          else
+            echo "✗ Cannot access Docker socket"
+            exit 1
+          fi
+          
+          echo -e "\n3. Testing Docker build and run:"
+          # Create a test Dockerfile
+          cat << EOF > Dockerfile.test
+          FROM ubuntu:20.04
+          RUN apt-get update && apt-get install -y curl
+          WORKDIR /app
+          COPY . .
+          CMD ["echo", "Docker test successful!"]
+          EOF
+          
+          # Build the image
+          echo "Building test image..."
+          docker build -t runner-test -f Dockerfile.test .
+          
+          # Run the container
+          echo "Running test container..."
+          docker run --name test-container runner-test
+          
+          # Test container logs
+          echo "Testing container logs..."
+          docker logs test-container
+          
+          # Test container inspection
+          echo "Testing container inspection..."
+          docker inspect test-container
+          
+          # Test volume mounting
+          echo -e "\n4. Testing volume mounting:"
+          echo "test data" > test-volume-data
+          docker run -v $(pwd):/data ubuntu:20.04 cat /data/test-volume-data
+          
+          # Test network creation and connection
+          echo -e "\n5. Testing Docker networking:"
+          docker network create test-network
+          docker run --network test-network --name network-test -d nginx
+          docker network inspect test-network
+          
+          # Cleanup
+          echo -e "\n6. Testing cleanup operations:"
+          docker stop test-container network-test
+          docker rm test-container network-test
+          docker rmi runner-test
+          docker network rm test-network
+          rm Dockerfile.test test-volume-data
+          
+          echo -e "\n✓ All Docker tests completed successfully!"
+
+      - name: Install and Test AWS CLI
+        if: always()
+        run: |
+          echo "=== Testing AWS CLI Installation ==="
+          sudo apt-get update
+          sudo apt-get install -y unzip
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip -o awscliv2.zip
+          sudo ./aws/install --update
+          rm -rf aws awscliv2.zip
+          aws --version
+
+      - name: Test Additional Tools
+        if: always()
+        run: |
+          echo "=== Testing Additional Tools ==="
+          # Test Git
+          git --version
+          
+          # Test Node.js
+          node --version || echo "Node.js not installed"
+          npm --version || echo "NPM not installed"
+          
+          # Test Python
+          python3 --version
+          pip3 --version || echo "PIP not installed"
+
+      - name: Test File Operations
+        if: always()
+        run: |
+          echo "=== Testing File Operations ==="
+          # Test creating files in different locations
+          echo "test" | sudo tee /usr/local/test.txt
+          echo "test" > ~/test.txt
+          
+          # Test permissions
+          sudo chmod 777 /usr/local/test.txt
+          chmod 777 ~/test.txt
+          
+          # Cleanup
+          sudo rm /usr/local/test.txt
+          rm ~/test.txt 
