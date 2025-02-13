@@ -99,9 +99,10 @@ update_system() {
     # Fix time sync issue first
     log_message "INFO" "Synchronizing system time..."
     if ! command -v ntpdate &> /dev/null; then
+        DEBIAN_FRONTEND=noninteractive sudo apt-get update
         DEBIAN_FRONTEND=noninteractive sudo apt-get install -y ntpdate
     fi
-    sudo ntpdate pool.ntp.org
+    sudo ntpdate pool.ntp.org || log_message "WARNING" "ntpdate failed, continuing with chrony"
     
     # Update with minimal packages
     sudo apt-get update
@@ -112,7 +113,6 @@ update_system() {
         ca-certificates \
         git \
         jq \
-        chrony \
         docker.io
     
     # Clean up
@@ -186,6 +186,11 @@ setup_time_sync() {
     sudo systemctl disable systemd-timesyncd || true
     sudo apt-mark hold systemd-timesyncd || true
     
+    # Install chrony first
+    log_message "INFO" "Installing chrony..."
+    DEBIAN_FRONTEND=noninteractive sudo apt-get update
+    DEBIAN_FRONTEND=noninteractive sudo apt-get install -y chrony
+    
     # Configure chrony
     if [ -f /etc/chrony/chrony.conf ]; then
         sudo cp /etc/chrony/chrony.conf /etc/chrony/chrony.conf.bak
@@ -210,14 +215,24 @@ logdir /var/log/chrony
 EOF
     fi
     
+    # Start and verify chrony
+    log_message "INFO" "Starting chrony service..."
+    sudo systemctl enable chronyd
     sudo systemctl restart chronyd
-    sudo chronyc sources
+    sleep 2  # Give chronyd time to start
     
-    # Verify chrony
-    if ! systemctl is-active --quiet chronyd; then
+    # Check chrony status
+    if sudo systemctl is-active --quiet chronyd; then
+        log_message "INFO" "Chrony service started successfully"
+        sudo chronyc sources
+    else
         log_message "WARNING" "Chrony failed to start. Attempting fix..."
         sudo apt-get install --reinstall -y chrony
         sudo systemctl restart chronyd
+        if ! sudo systemctl is-active --quiet chronyd; then
+            log_message "ERROR" "Failed to start chrony service"
+            exit 1
+        fi
     fi
 }
 
