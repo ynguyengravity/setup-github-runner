@@ -147,34 +147,60 @@ install_runner() {
 }
 
 setup_maintenance() {
-    log_message "INFO" "Setting up maintenance..."
+    log_message "INFO" "Setting up maintenance scripts..."
     
-    # Create maintenance script
-    cat << 'EOF' | sudo tee "$MAINTENANCE_SCRIPT"
+    # Create daily maintenance script
+    cat << 'EOF' | sudo tee "${MAINTENANCE_SCRIPT}_daily.sh"
 #!/bin/bash
 
-# System update
-apt-get update
-DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
-DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y
+# Log start of daily maintenance
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting daily maintenance..."
 
-# System cleanup
-apt-get autoremove -y
+# Safe system cleanup
 apt-get clean
 journalctl --vacuum-time=7d
 
-# Docker cleanup
+# Safe Docker cleanup (only unused resources)
+docker image prune -f --filter "until=24h"
+docker container prune -f --filter "until=24h"
+
+# Log completion
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Daily maintenance completed"
+EOF
+
+    # Create weekly maintenance script
+    cat << 'EOF' | sudo tee "${MAINTENANCE_SCRIPT}_weekly.sh"
+#!/bin/bash
+
+# Log start of weekly maintenance
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting weekly maintenance..."
+
+# System update (without restart)
+if ! ps aux | grep -i apt | grep -v grep > /dev/null; then
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-reboot
+fi
+
+# Full Docker cleanup
 docker system prune -f
 docker volume prune -f
 
 # Restart runner
 systemctl restart actions.runner.*
+
+# Log completion
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Weekly maintenance completed"
 EOF
     
-    sudo chmod +x "$MAINTENANCE_SCRIPT"
+    # Set permissions
+    sudo chmod +x "${MAINTENANCE_SCRIPT}_daily.sh"
+    sudo chmod +x "${MAINTENANCE_SCRIPT}_weekly.sh"
     
-    # Setup daily maintenance
-    (crontab -l 2>/dev/null | grep -v "$MAINTENANCE_SCRIPT"; echo "0 0 * * * $MAINTENANCE_SCRIPT") | crontab -
+    # Setup maintenance schedules
+    # Daily at 2 AM
+    (crontab -l 2>/dev/null | grep -v "${MAINTENANCE_SCRIPT}_daily.sh"; echo "0 2 * * * ${MAINTENANCE_SCRIPT}_daily.sh") | crontab -
+    # Weekly on Sunday at 1 AM
+    (crontab -l 2>/dev/null | grep -v "${MAINTENANCE_SCRIPT}_weekly.sh"; echo "0 1 * * 0 ${MAINTENANCE_SCRIPT}_weekly.sh") | crontab -
 }
 
 verify_installation() {
