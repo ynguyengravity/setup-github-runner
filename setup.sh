@@ -60,24 +60,28 @@ sudo apt update && sudo apt upgrade -y && sudo apt autoremove -y
 
 # Cài đặt các gói cần thiết
 echo "[INFO] Cài đặt các gói hỗ trợ..."
-# Stop and disable systemd-timesyncd if it's running
-echo "[INFO] Stopping and disabling systemd-timesyncd..."
-sudo systemctl stop systemd-timesyncd
-sudo systemctl disable systemd-timesyncd
 
-# Remove conflicting packages
-echo "[INFO] Removing conflicting packages..."
-sudo apt remove -y ntpsec systemd-timesyncd || true
+# First remove all potential conflicting time synchronization packages
+echo "[INFO] Removing conflicting time synchronization packages..."
+sudo apt remove -y ntpsec systemd-timesyncd ntp || true
+sudo apt autoremove -y || true
 
-# Install required packages
-echo "[INFO] Installing required packages..."
+# Install packages in groups to better handle dependencies
+echo "[INFO] Installing base packages..."
 sudo apt update
-sudo apt install -y curl jq git build-essential unzip python3 python3-pip nodejs npm chrony
+sudo apt install -y curl jq git build-essential unzip
 
-# Configure time synchronization with chrony
-echo "[INFO] Configuring chrony..."
+echo "[INFO] Installing Python and Node.js..."
+sudo apt install -y python3 python3-pip nodejs npm
+
+echo "[INFO] Installing and configuring chrony..."
+sudo apt install -y chrony
 sudo systemctl enable chronyd
 sudo systemctl start chronyd
+
+# Verify chrony is running
+echo "[INFO] Verifying chrony status..."
+sudo systemctl status chronyd || echo "Warning: Chrony service status check failed"
 
 # Cài đặt Docker nếu chưa có
 echo "[INFO] Kiểm tra Docker..."
