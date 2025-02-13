@@ -1,12 +1,13 @@
 # Hướng Dẫn Cài Đặt GitHub Runner Tự Động
 
 ## Giới Thiệu
-Script này giúp bạn thiết lập một GitHub self-hosted runner trên Ubuntu, bao gồm cài đặt Docker, cấp quyền cần thiết, đăng ký runner, và tự động cập nhật hệ thống.
+Script này giúp bạn thiết lập một GitHub self-hosted runner trên Ubuntu, bao gồm cài đặt Docker, cấp quyền cần thiết, đăng ký runner, và tự động cập nhật hệ thống. Script được thiết kế để chạy tự động và an toàn trong môi trường production.
 
 ## Yêu Cầu Hệ Thống
 - Ubuntu Server 20.04 hoặc mới hơn
 - Kết nối Internet
 - Tài khoản có quyền `sudo`
+- Tối thiểu 2GB RAM và 10GB ổ cứng trống
 
 ## Cách Chạy Script
 
@@ -21,50 +22,94 @@ chmod +x setup.sh
 ```bash
 ./setup.sh <RUNNER_ID>
 ```
-Thay `<RUNNER_ID>` bằng ID runner mong muốn.
+Thay `<RUNNER_ID>` bằng ID runner mong muốn (ví dụ: test, prod, dev).
 
 ### 3. Chạy Lại (Nếu Cần)
-Nếu runner đã được cài đặt trước đó và bạn muốn chạy lại script, hãy thêm tham số `force`:
+Nếu runner đã được cài đặt trước đó và bạn muốn chạy lại script:
 ```bash
 ./setup.sh <RUNNER_ID> force
 ```
 
-## Các Thành Phần Của Script
-- **Cập nhật hệ thống**: Cập nhật và dọn dẹp hệ thống Ubuntu
-- **Cài đặt Docker**: Cài đặt Docker nếu chưa có và cấp quyền cho user
-- **Cấu hình sudo không cần mật khẩu**: Giúp runner có thể chạy mà không cần nhập mật khẩu sudo
-- **Tải và cài đặt GitHub Runner**: Tải xuống runner từ GitHub (phiên bản 2.322.0), giải nén và cấu hình
-- **Đăng ký runner với GitHub**: Tự động đăng ký runner với token được cấu hình sẵn
-- **Cài đặt runner như một service**: Giúp runner tự động chạy khi hệ thống khởi động
-- **Kiểm tra trạng thái runner**: Kiểm tra xem runner có hoạt động đúng hay không
+## Tính Năng Chính
+1. **Tự Động Hóa Hoàn Toàn**: Không cần thao tác thủ công sau khi chạy script
+2. **Đồng Bộ Thời Gian**: Tự động đồng bộ thời gian hệ thống
+3. **Quản Lý Docker**: Cài đặt và cấu hình Docker tự động
+4. **Bảo Mật**: Cấu hình quyền và permissions an toàn
+5. **Bảo Trì Tự Động**: Script bảo trì chạy hàng ngày
+6. **Logging**: Ghi log đầy đủ để theo dõi và xử lý sự cố
 
 ## Cấu Hình Runner
 - **Tên Runner**: `runner-<RUNNER_ID>-<IP_ADDRESS>`
 - **Labels**: `test-setup,linux,x64`
 - **Repository**: ynguyengravity/setup-github-runner
+- **Workspace**: `/opt/actions-runner/_work`
+
+## Các Thành Phần Được Cài Đặt
+- Docker Engine
+- Git
+- Python 3 và pip
+- Node.js và npm
+- Build Essential tools
+- AWS CLI (trong workflow tests)
+
+## Bảo Trì Tự Động
+Script tự động thực hiện các tác vụ bảo trì hàng ngày:
+- Cập nhật hệ thống
+- Dọn dẹp Docker (images, volumes)
+- Xóa logs cũ
+- Khởi động lại runner
 
 ## Xử Lý Sự Cố
-1. **Kiểm tra log cài đặt**:
-   ```bash
-   sudo cat /var/log/github-runner-setup.log
-   ```
-2. **Kiểm tra trạng thái runner**:
-   ```bash
-   systemctl status actions.runner
-   ```
-3. **Xóa runner và cài lại**:
-   ```bash
-   cd ~/actions-runner
-   ./config.sh remove --unattended
-   rm -rf ~/actions-runner
-   ```
-   Sau đó, chạy lại script với tham số `force`.
 
-## Ghi Chú
-- Script sử dụng một token cố định được cấu hình sẵn trong mã nguồn
-- Đảm bảo server của bạn có kết nối Internet để tải xuống các thành phần cần thiết
-- Lock file được tạo tại `/tmp/github-runner-setup.lock` để tránh chạy trùng lặp
-- Script sẽ tự động yêu cầu quyền sudo khi cần thiết
+### 1. Kiểm Tra Logs
+```bash
+sudo cat /var/log/github-runner-setup.log
+```
+
+### 2. Kiểm Tra Trạng Thái
+```bash
+# Kiểm tra runner
+systemctl status actions.runner.*
+
+# Kiểm tra Docker
+docker ps
+docker info
+
+# Kiểm tra quyền
+ls -l /var/run/docker.sock
+groups
+```
+
+### 3. Xóa và Cài Lại
+```bash
+# Dừng service
+sudo systemctl stop actions.runner.*
+
+# Xóa cấu hình cũ
+cd /opt/actions-runner
+sudo ./svc.sh uninstall
+sudo ./config.sh remove --unattended
+
+# Xóa thư mục
+sudo rm -rf /opt/actions-runner
+
+# Chạy lại script
+./setup.sh <RUNNER_ID> force
+```
+
+## Bảo Mật
+- Lock file ngăn chạy đồng thời nhiều instances
+- Quyền hạn được cấu hình tối thiểu cần thiết
+- Tự động xóa dữ liệu nhạy cảm sau khi cài đặt
+- Kiểm tra và xác thực các bước quan trọng
 
 ## Liên Hệ & Hỗ Trợ
-Nếu gặp vấn đề, hãy mở issue trên repository GitHub hoặc kiểm tra log tại `/var/log/github-runner-setup.log` để tìm lỗi.
+- Mở issue trên repository GitHub
+- Kiểm tra logs tại `/var/log/github-runner-setup.log`
+- Chạy test workflow để kiểm tra cài đặt: `.github/workflows/test-runner.yml`
+
+## Lưu Ý
+- Không chạy script với quyền root
+- Đảm bảo đủ dung lượng ổ cứng cho Docker images
+- Backup dữ liệu quan trọng trước khi chạy lại script với `force`
+- Kiểm tra kết nối internet trước khi chạy script
