@@ -2,153 +2,256 @@
 
 set -e
 
+# Global variables
+SCRIPT_VERSION="1.0.0"
+RUNNER_DIR="/opt/actions-runner"
+WORKSPACE_BASE="${RUNNER_DIR}/_work"
 LOCK_FILE="/tmp/github-runner-setup.lock"
-FORCE_RUN=$2
 LOG_FILE="/var/log/github-runner-setup.log"
+MAINTENANCE_SCRIPT="${RUNNER_DIR}/maintenance.sh"
 
-# Tạo và set quyền cho log file và lock file
-sudo touch "$LOG_FILE"
-sudo chown $USER:$USER "$LOG_FILE"
-sudo touch "$LOCK_FILE"
-sudo chown $USER:$USER "$LOCK_FILE"
+# Helper functions
+log_message() {
+    local level="$1"
+    local message="$2"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$level] $message" | tee -a "$LOG_FILE"
+}
 
-exec > >(tee -a "$LOG_FILE") 2>&1
+generate_random_string() {
+    local length=${1:-8}
+    tr -dc 'a-zA-Z0-9' < /dev/urandom | fold -w "$length" | head -n 1
+}
 
-echo "[INFO] Bắt đầu script cài đặt GitHub Runner..."
+get_ip_address() {
+    hostname -I | awk '{print $1}'
+}
 
-# Setup workspace directories
-echo "[INFO] Setting up workspace directories..."
-WORKSPACE_BASE="/home/$USER/actions-runner/_work"
-sudo mkdir -p "$WORKSPACE_BASE"
-sudo mkdir -p "$WORKSPACE_BASE/_temp"
-sudo chown -R $USER:$USER "$WORKSPACE_BASE"
-sudo chmod -R 755 "$WORKSPACE_BASE"
+create_runner_name() {
+    local runner_id="$1"
+    local ip_addr=$(get_ip_address)
+    echo "runner-${runner_id}-${ip_addr}"
+}
 
-# Ensure Git has correct permissions
-echo "[INFO] Configuring Git..."
-git config --global --add safe.directory "*"
-git config --global core.fileMode false
-git config --global core.longpaths true
+check_prerequisites() {
+    local runner_id="$1"
+    local force_run="$2"
+    
+    # Check if script is run with sudo
+    if [ "$EUID" -eq 0 ]; then
+        if [ -z "$SUDO_USER" ]; then
+            log_message "ERROR" "Please run without sudo, the script will ask for sudo when needed"
+            exit 1
+        fi
+    fi
+    
+    # Check required parameters
+    if [ -z "$runner_id" ]; then
+        log_message "ERROR" "RUNNER_ID không được để trống. Hãy cung cấp một ID."
+        exit 1
+    fi
+    
+    # Check lock file
+    if [ -f "$LOCK_FILE" ] && [ "$force_run" != "force" ]; then
+        log_message "ERROR" "Script đã được chạy trước đó. Thêm 'force' để chạy lại."
+        exit 1
+    fi
+}
 
-if [ -f "$LOCK_FILE" ] && [ "$FORCE_RUN" != "force" ]; then
-    echo "[ERROR] Script đã được chạy trước đó. Nếu muốn chạy lại, hãy thêm tham số 'force'."
-    exit 1
-fi
+setup_directories() {
+    log_message "INFO" "Setting up directories..."
+    
+    # Create and set permissions for log files
+    sudo mkdir -p "$(dirname "$LOG_FILE")"
+    sudo touch "$LOG_FILE" "$LOCK_FILE"
+    sudo chown "$USER:$USER" "$LOG_FILE" "$LOCK_FILE"
+    
+    # Create runner directories
+    sudo mkdir -p "$RUNNER_DIR" "$WORKSPACE_BASE" "${WORKSPACE_BASE}/_temp"
+    sudo chown -R "$USER:$USER" "$RUNNER_DIR"
+    sudo chmod -R 755 "$RUNNER_DIR"
+}
 
-echo "[INFO] Nhận tham số đầu vào..."
-RUNNER_ID=$1
-# REG_TOKEN=$2
-REG_TOKEN="BBG5IMRUQDG65XTOSKAKCHLHVV464"
-if [ -z "$RUNNER_ID" ]; then
-    echo "[ERROR] RUNNER_ID không được để trống. Hãy cung cấp một ID."
-    exit 1
-fi
-if [ -z "$REG_TOKEN" ]; then
-    echo "[ERROR] REG_TOKEN không được để trống. Hãy cung cấp một token hợp lệ."
-    exit 1
-fi
+setup_system() {
+    log_message "INFO" "Setting up system..."
+    
+    # Update system
+    sudo apt-get -o Acquire::Check-Valid-Until=false \
+                 -o Acquire::Check-Date=false \
+                 -o APT::Get::AllowUnauthenticated=true \
+                 update
+    
+    # Install dependencies
+    DEBIAN_FRONTEND=noninteractive sudo apt-get install -y --no-install-recommends \
+        curl \
+        jq \
+        git \
+        build-essential \
+        unzip \
+        python3 \
+        python3-pip \
+        nodejs \
+        npm \
+        docker.io
+    
+    # Configure user permissions
+    sudo usermod -aG docker,adm,users,systemd-journal "$USER"
+    
+    # Configure sudo
+    if ! sudo grep -q "$USER ALL=(ALL) NOPASSWD:ALL" /etc/sudoers; then
+        echo "$USER ALL=(ALL) NOPASSWD:ALL" | sudo tee -a /etc/sudoers
+    fi
+    
+    # Configure Git
+    git config --global --add safe.directory "*"
+    git config --global core.fileMode false
+    git config --global core.longpaths true
+}
 
-IP_ADDRESS=$(hostname -I | awk '{print $1}')
-GITHUB_OWNER="Gravity-Global"
-RUNNER_NAME="runner-$RUNNER_ID-$IP_ADDRESS"
-LABELS="test-setup,linux,x64"
-SERVICE_NAME="actions.runner.$GITHUB_OWNER.$RUNNER_NAME"
+setup_docker() {
+    log_message "INFO" "Setting up Docker..."
+    
+    sudo chmod 666 /var/run/docker.sock
+    
+    # Test Docker
+    docker pull hello-world
+    docker run --rm hello-world
+    docker rmi hello-world
+    docker system prune -f
+}
 
-# Cập nhật hệ thống
-echo "[INFO] Cập nhật hệ thống..."
-sudo apt update && sudo apt upgrade -y && sudo apt autoremove -y
+install_runner() {
+    local runner_name="$1"
+    local reg_token="$2"
+    local labels="$3"
+    
+    log_message "INFO" "Installing GitHub Runner..."
+    
+    cd "$RUNNER_DIR"
+    
+    # Download and extract runner
+    curl -o actions-runner-linux-x64.tar.gz -L \
+        https://github.com/actions/runner/releases/download/v2.322.0/actions-runner-linux-x64-2.322.0.tar.gz
+    tar xzf ./actions-runner-linux-x64.tar.gz
+    rm actions-runner-linux-x64.tar.gz
+    
+    # Configure runner
+    ./config.sh --url https://github.com/Gravity-Global \
+                --token "$reg_token" \
+                --name "$runner_name" \
+                --labels "$labels" \
+                --unattended
+    
+    # Install service
+    sudo ./svc.sh install
+    sudo ./svc.sh start
+}
 
-# Cài đặt các gói cần thiết
-echo "[INFO] Cài đặt các gói hỗ trợ..."
-sudo apt install -y curl jq git ntp build-essential unzip python3 python3-pip nodejs npm
+setup_maintenance() {
+    log_message "INFO" "Setting up maintenance..."
+    
+    # Create maintenance script
+    cat << 'EOF' | sudo tee "$MAINTENANCE_SCRIPT"
+#!/bin/bash
 
-# Cài đặt Docker nếu chưa có
-echo "[INFO] Kiểm tra Docker..."
-if ! command -v docker &> /dev/null; then
-    echo "[INFO] Cài đặt Docker..."
-    sudo apt install -y docker.io
-fi
+# System update
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
+DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y
 
-# Thêm user hiện tại vào các nhóm cần thiết
-echo "[INFO] Thêm user vào các nhóm cần thiết..."
-sudo usermod -aG docker,adm,users,systemd-journal $USER
+# System cleanup
+apt-get autoremove -y
+apt-get clean
+journalctl --vacuum-time=7d
 
-# Cấu hình sudo không cần mật khẩu cho user hiện tại
-echo "[INFO] Cấu hình sudo không cần mật khẩu..."
-if ! sudo grep -q "$USER ALL=(ALL) NOPASSWD:ALL" /etc/sudoers; then
-    echo "$USER ALL=(ALL) NOPASSWD:ALL" | sudo tee -a /etc/sudoers
-fi
-
-# Tạo và cấp quyền cho các thư mục cần thiết
-echo "[INFO] Cấp quyền cho các thư mục cần thiết..."
-sudo mkdir -p /usr/local/{aws-cli,bin,test-dir}
-sudo chown -R $USER:$USER /usr/local/aws-cli
-sudo chown -R $USER:$USER /usr/local/bin
-sudo chown -R $USER:$USER /usr/local/test-dir
-sudo chmod -R 755 /usr/local/aws-cli
-sudo chmod -R 755 /usr/local/bin
-sudo chmod -R 755 /usr/local/test-dir
-
-# Cấp quyền cho Docker socket
-echo "[INFO] Cấp quyền cho Docker socket..."
-sudo chmod 666 /var/run/docker.sock
-
-# Test Docker và cleanup
-echo "[INFO] Test Docker và pull images..."
-echo "Testing Docker pull..."
-docker pull ubuntu:20.04
-docker pull nginx:latest
-docker pull hello-world
-
-echo "Testing Docker run..."
-docker run --rm hello-world
-
-echo "Cleaning up Docker test..."
-docker rmi ubuntu:20.04 nginx:latest hello-world
+# Docker cleanup
 docker system prune -f
+docker volume prune -f
 
-# Tạo thư mục actions-runner với quyền user hiện tại
-echo "[INFO] Tạo thư mục actions-runner..."
-mkdir -p ~/actions-runner
-cd ~/actions-runner
+# Restart runner
+systemctl restart actions.runner.*
+EOF
+    
+    sudo chmod +x "$MAINTENANCE_SCRIPT"
+    
+    # Setup daily maintenance
+    (crontab -l 2>/dev/null | grep -v "$MAINTENANCE_SCRIPT"; echo "0 0 * * * $MAINTENANCE_SCRIPT") | crontab -
+}
 
-# Cài đặt runner
-echo "[INFO] Tải và cài đặt GitHub Runner..."
-curl -o actions-runner-linux-x64.tar.gz -L https://github.com/actions/runner/releases/download/v2.322.0/actions-runner-linux-x64-2.322.0.tar.gz
-tar xzf ./actions-runner-linux-x64.tar.gz
-rm actions-runner-linux-x64.tar.gz
+verify_installation() {
+    local service_name="$1"
+    
+    log_message "INFO" "Verifying installation..."
+    
+    # Check service status
+    if ! sudo systemctl is-active --quiet "$service_name"; then
+        log_message "WARNING" "Runner service is not active"
+        sudo systemctl status "$service_name" || true
+    else
+        log_message "INFO" "Runner service is active"
+    fi
+    
+    # Verify versions
+    log_message "INFO" "Installed versions:"
+    docker --version
+    python3 --version
+    node --version
+    npm --version
+    git --version
+}
 
-# Đăng ký runner
-echo "[INFO] Đăng ký runner..."
-./config.sh --url https://github.com/$GITHUB_OWNER --token $REG_TOKEN --name $RUNNER_NAME --labels $LABELS --unattended
+cleanup() {
+    log_message "INFO" "Cleaning up..."
+    sudo rm -f "$LOCK_FILE"
+}
 
-# Cài đặt runner như một service
-echo "[INFO] Cài đặt runner như một service..."
-sudo ./svc.sh install
-sudo ./svc.sh start
+show_help() {
+    cat << EOF
+Usage: $0 <runner_id> [force]
 
-# Cấp quyền cho thư mục actions-runner
-echo "[INFO] Cấp quyền cho thư mục actions-runner..."
-sudo chown -R $USER:$USER ~/actions-runner
-sudo chmod -R 755 ~/actions-runner
+Options:
+  runner_id    Unique identifier for the runner
+  force        Force reinstallation if already installed
 
-# Kiểm tra trạng thái runner
-echo "[INFO] Kiểm tra trạng thái runner..."
-sudo systemctl status $SERVICE_NAME || echo "[WARNING] Runner có thể chưa hoạt động đúng. Hãy kiểm tra lại."
+Example:
+  $0 test
+  $0 prod force
+EOF
+}
 
-echo "[INFO] GitHub Runner đã được cài đặt thành công và đang chạy với tên $RUNNER_NAME!"
+main() {
+    # Parse arguments
+    case "$1" in
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+    esac
+    
+    local runner_id="$1"
+    local force_run="$2"
+    local reg_token="BBG5IMRUQDG65XTOSKAKCHLHVV464"
+    
+    # Setup
+    check_prerequisites "$runner_id" "$force_run"
+    setup_directories
+    
+    # Create runner name
+    local runner_name=$(create_runner_name "$runner_id")
+    local service_name="actions.runner.Gravity-Global.$runner_name"
+    local labels="test-setup,linux,x64"
+    
+    # Main installation
+    setup_system
+    setup_docker
+    install_runner "$runner_name" "$reg_token" "$labels"
+    setup_maintenance
+    
+    # Verify and cleanup
+    verify_installation "$service_name"
+    cleanup
+    
+    log_message "INFO" "Installation completed successfully!"
+}
 
-# Verify installation
-echo "[INFO] Verifying installation..."
-echo "- Docker version: $(docker --version)"
-echo "- Python version: $(python3 --version)"
-echo "- Node.js version: $(node --version)"
-echo "- NPM version: $(npm --version)"
-echo "- Git version: $(git --version)"
-
-# After installing runner service, ensure workspace permissions again
-echo "[INFO] Final workspace permissions check..."
-sudo chown -R $USER:$USER "$WORKSPACE_BASE"
-sudo chmod -R 755 "$WORKSPACE_BASE"
-find "$WORKSPACE_BASE" -type d -exec chmod 755 {} \;
-find "$WORKSPACE_BASE" -type f -exec chmod 644 {} \;
+# Execute main function with all arguments
+main "$@"
