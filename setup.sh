@@ -186,89 +186,15 @@ setup_time_sync() {
     log_message "INFO" "Attempting to sync hardware clock..."
     sudo hwclock --hctosys || log_message "WARNING" "Failed to sync from hardware clock"
     
-    # Manual time sync using multiple methods
+    # Manual time sync using HTTP
     log_message "INFO" "Attempting manual time sync..."
-    
-    # Method 1: Using date command with HTTP
     TIME_STRING=$(curl -sI http://google.com | grep -i "^date:" | cut -d' ' -f2-)
     if [ -n "$TIME_STRING" ]; then
         log_message "INFO" "Got time from HTTP header"
         sudo date -s "$TIME_STRING" || log_message "WARNING" "Failed to set time from HTTP"
     fi
     
-    # Method 2: Using specific time server
-    if ! date -s "$(curl -s --head http://time.nist.gov | grep '^Date:' | cut -d' ' -f2-)"
-    then
-        log_message "WARNING" "Failed to sync with time.nist.gov"
-        
-        # Method 3: Direct NTP query
-        if command -v timeout &> /dev/null; then
-            log_message "INFO" "Attempting direct NTP query..."
-            echo -n "time.google.com 123" | timeout 3 nc -u time.google.com 123
-            if [ $? -eq 0 ]; then
-                log_message "INFO" "NTP query successful"
-            else
-                log_message "WARNING" "NTP query failed"
-            fi
-        fi
-    fi
-    
-    log_message "DEBUG" "Time after sync attempts: $(date)"
-    
-    # Install required packages without time check
-    log_message "INFO" "Installing required packages..."
-    sudo apt-get -o Acquire::Check-Valid-Until=false \
-                 -o Acquire::Check-Date=false \
-                 -o APT::Get::AllowUnauthenticated=true \
-                 update
-    
-    sudo apt-get -o Acquire::Check-Valid-Until=false \
-                 -o Acquire::Check-Date=false \
-                 -o APT::Get::AllowUnauthenticated=true \
-                 install -y --no-install-recommends chrony
-    
-    # Configure chrony immediately
-    if [ -f /etc/chrony/chrony.conf ]; then
-        log_message "INFO" "Configuring chrony..."
-        cat << 'EOF' | sudo tee /etc/chrony/chrony.conf
-# Allow large clock corrections
-makestep 1.0 -1
-
-# Use multiple NTP servers
-server time.google.com iburst
-server time.cloudflare.com iburst
-server time.facebook.com iburst
-server time.apple.com iburst
-
-# Record clock drift
-driftfile /var/lib/chrony/drift
-
-# Enable kernel RTC sync
-rtcsync
-
-# Log directory
-logdir /var/log/chrony
-EOF
-        
-        # Start chrony service
-        log_message "INFO" "Starting chrony service..."
-        sudo systemctl enable chrony
-        sudo systemctl restart chrony
-        
-        # Wait for chrony to start and sync
-        sleep 5
-        
-        # Check chrony status
-        if sudo systemctl is-active --quiet chrony; then
-            log_message "INFO" "Chrony service started successfully"
-            sudo chronyc tracking || true
-            sudo chronyc sources || true
-        else
-            log_message "WARNING" "Chrony service failed to start, continuing anyway..."
-        fi
-    else
-        log_message "ERROR" "Chrony configuration file not found"
-    fi
+    log_message "DEBUG" "Time after sync: $(date)"
 }
 
 # Function to setup Docker
