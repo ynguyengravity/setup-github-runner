@@ -24,7 +24,7 @@ fi
 echo "[INFO] Nhận tham số đầu vào..."
 RUNNER_ID=$1
 # REG_TOKEN=$2
-REG_TOKEN="BBG5IMVLOR7VHP4BKW2ZQ7DHVVQYE"
+REG_TOKEN="BBG5IMRUQDG65XTOSKAKCHLHVV464"
 if [ -z "$RUNNER_ID" ]; then
     echo "[ERROR] RUNNER_ID không được để trống. Hãy cung cấp một ID."
     exit 1
@@ -46,7 +46,7 @@ sudo apt update && sudo apt upgrade -y && sudo apt autoremove -y
 
 # Cài đặt các gói cần thiết
 echo "[INFO] Cài đặt các gói hỗ trợ..."
-sudo apt install -y curl jq git ntp build-essential
+sudo apt install -y curl jq git ntp build-essential unzip python3 python3-pip nodejs npm
 
 # Cài đặt Docker nếu chưa có
 echo "[INFO] Kiểm tra Docker..."
@@ -55,15 +55,35 @@ if ! command -v docker &> /dev/null; then
     sudo apt install -y docker.io
 fi
 
-# Thêm user hiện tại vào nhóm Docker
-echo "[INFO] Thêm user vào nhóm Docker..."
-sudo usermod -aG docker $USER
+# Thêm user hiện tại vào các nhóm cần thiết
+echo "[INFO] Thêm user vào các nhóm cần thiết..."
+sudo usermod -aG docker,adm,users,systemd-journal $USER
 
-# Cấu hình sudo không cần mật khẩu
+# Cấu hình sudo không cần mật khẩu cho user hiện tại
 echo "[INFO] Cấu hình sudo không cần mật khẩu..."
 if ! sudo grep -q "$USER ALL=(ALL) NOPASSWD:ALL" /etc/sudoers; then
     echo "$USER ALL=(ALL) NOPASSWD:ALL" | sudo tee -a /etc/sudoers
 fi
+
+# Tạo và cấp quyền cho các thư mục cần thiết
+echo "[INFO] Cấp quyền cho các thư mục cần thiết..."
+sudo mkdir -p /usr/local/{aws-cli,bin,test-dir}
+sudo chown -R $USER:$USER /usr/local/aws-cli
+sudo chown -R $USER:$USER /usr/local/bin
+sudo chown -R $USER:$USER /usr/local/test-dir
+sudo chmod -R 755 /usr/local/aws-cli
+sudo chmod -R 755 /usr/local/bin
+sudo chmod -R 755 /usr/local/test-dir
+
+# Cấp quyền cho Docker socket
+echo "[INFO] Cấp quyền cho Docker socket..."
+sudo chmod 666 /var/run/docker.sock
+
+# Test Docker và pull một số images phổ biến
+echo "[INFO] Test Docker và pull images..."
+docker pull ubuntu:20.04
+docker pull nginx:latest
+docker pull hello-world
 
 # Tạo thư mục actions-runner với quyền user hiện tại
 echo "[INFO] Tạo thư mục actions-runner..."
@@ -85,8 +105,21 @@ echo "[INFO] Cài đặt runner như một service..."
 sudo ./svc.sh install
 sudo ./svc.sh start
 
+# Cấp quyền cho thư mục actions-runner
+echo "[INFO] Cấp quyền cho thư mục actions-runner..."
+sudo chown -R $USER:$USER ~/actions-runner
+sudo chmod -R 755 ~/actions-runner
+
 # Kiểm tra trạng thái runner
 echo "[INFO] Kiểm tra trạng thái runner..."
 sudo systemctl status $SERVICE_NAME || echo "[WARNING] Runner có thể chưa hoạt động đúng. Hãy kiểm tra lại."
 
 echo "[INFO] GitHub Runner đã được cài đặt thành công và đang chạy với tên $RUNNER_NAME!"
+
+# Verify installation
+echo "[INFO] Verifying installation..."
+echo "- Docker version: $(docker --version)"
+echo "- Python version: $(python3 --version)"
+echo "- Node.js version: $(node --version)"
+echo "- NPM version: $(npm --version)"
+echo "- Git version: $(git --version)"
