@@ -96,10 +96,26 @@ cleanup_system() {
 update_system() {
     log_message "INFO" "Performing system update..."
     
+    # Fix time sync issue first
+    log_message "INFO" "Synchronizing system time..."
+    if ! command -v ntpdate &> /dev/null; then
+        DEBIAN_FRONTEND=noninteractive sudo apt-get install -y ntpdate
+    fi
+    sudo ntpdate pool.ntp.org
+    
+    # Update with minimal packages
     sudo apt-get update
-    DEBIAN_FRONTEND=noninteractive sudo apt-get upgrade -y
-    DEBIAN_FRONTEND=noninteractive sudo apt-get dist-upgrade -y
-    sudo apt-get --fix-broken install -y
+    
+    # Install only essential packages
+    DEBIAN_FRONTEND=noninteractive sudo apt-get install -y --no-install-recommends \
+        curl \
+        ca-certificates \
+        git \
+        jq \
+        chrony \
+        docker.io
+    
+    # Clean up
     sudo apt-get autoremove -y
     sudo apt-get clean
 }
@@ -166,21 +182,36 @@ setup_time_sync() {
     log_message "INFO" "Setting up time synchronization..."
     
     # Remove conflicting packages
-    sudo apt-mark hold systemd-timesyncd ntpsec ntp time-daemon || true
-    sudo dpkg --force-all -P systemd-timesyncd ntpsec ntp time-daemon || true
     sudo systemctl stop systemd-timesyncd || true
     sudo systemctl disable systemd-timesyncd || true
+    sudo apt-mark hold systemd-timesyncd || true
     
-    # Install and configure chrony
-    DEBIAN_FRONTEND=noninteractive sudo apt-get install -y --no-install-recommends chrony
-    
+    # Configure chrony
     if [ -f /etc/chrony/chrony.conf ]; then
         sudo cp /etc/chrony/chrony.conf /etc/chrony/chrony.conf.bak
-        echo "server pool.ntp.org iburst" | sudo tee /etc/chrony/chrony.conf
+        cat << 'EOF' | sudo tee /etc/chrony/chrony.conf
+# Use multiple NTP servers for better reliability
+server 0.pool.ntp.org iburst
+server 1.pool.ntp.org iburst
+server 2.pool.ntp.org iburst
+server 3.pool.ntp.org iburst
+
+# Record the rate at which the system clock gains/losses time
+driftfile /var/lib/chrony/drift
+
+# Allow the system clock to be stepped in the first three updates
+makestep 1.0 3
+
+# Enable kernel synchronization of the real-time clock (RTC)
+rtcsync
+
+# Specify directory for log files
+logdir /var/log/chrony
+EOF
     fi
     
-    sudo systemctl enable chronyd
-    sudo systemctl start chronyd
+    sudo systemctl restart chronyd
+    sudo chronyc sources
     
     # Verify chrony
     if ! systemctl is-active --quiet chronyd; then
@@ -255,9 +286,10 @@ main() {
     
     log_message "INFO" "Starting GitHub Runner setup..."
     
+    # Setup time sync first to avoid update issues
+    setup_time_sync
     update_system
     cleanup_system
-    setup_time_sync
     setup_docker
     setup_runner "$RUNNER_ID" "$REG_TOKEN"
     setup_maintenance_cron
