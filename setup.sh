@@ -218,6 +218,35 @@ Example:
 EOF
 }
 
+# Function to sync time
+sync_time() {
+    log_message "INFO" "Synchronizing system time..."
+    
+    # Method 1: Using Google's headers
+    local time_string=$(curl -sI google.com | grep -i "^date:" | cut -d' ' -f2-)
+    if [ -n "$time_string" ]; then
+        log_message "INFO" "Setting time from Google's response..."
+        sudo date -s "$time_string" && {
+            log_message "INFO" "Time synchronized successfully"
+            return 0
+        }
+    fi
+    
+    # Method 2: Using worldtimeapi.org
+    local time_string=$(curl -s http://worldtimeapi.org/api/timezone/Etc/UTC | grep -o '"datetime":"[^"]*"' | cut -d'"' -f4)
+    if [ -n "$time_string" ]; then
+        log_message "INFO" "Setting time from worldtimeapi.org..."
+        sudo date -s "$time_string" && {
+            log_message "INFO" "Time synchronized successfully"
+            return 0
+        }
+    fi
+    
+    log_message "WARNING" "Failed to synchronize time"
+    return 1
+}
+
+# Update main function to include time sync
 main() {
     # Parse arguments
     case "$1" in
@@ -234,6 +263,9 @@ main() {
     # Setup
     check_prerequisites "$runner_id" "$force_run"
     setup_directories
+    
+    # Sync time before proceeding
+    sync_time
     
     # Create runner name
     local runner_name=$(create_runner_name "$runner_id")
