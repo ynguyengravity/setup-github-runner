@@ -53,9 +53,7 @@ jobs:
           git config --global --add safe.directory "*"
           git config --global core.fileMode false
 
-      - name: Chf: always()
-        uses: actions/checkout@v2
-
+      - name: Test User Info
         if: always()
         run: |
           echo "=== Testing User Info ==="
