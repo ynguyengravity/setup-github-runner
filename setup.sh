@@ -96,19 +96,15 @@ cleanup_system() {
 update_system() {
     log_message "INFO" "Performing system update..."
     
-    # Fix time sync issue first
-    log_message "INFO" "Synchronizing system time..."
-    if ! command -v ntpdate &> /dev/null; then
-        DEBIAN_FRONTEND=noninteractive sudo apt-get update
-        DEBIAN_FRONTEND=noninteractive sudo apt-get install -y ntpdate
-    fi
-    sudo ntpdate pool.ntp.org || log_message "WARNING" "ntpdate failed, continuing with chrony"
-    
-    # Update with minimal packages
-    sudo apt-get update
+    # Update with time check override if needed
+    sudo apt-get -o Acquire::Check-Valid-Until=false -o Acquire::Check-Date=false update || {
+        log_message "ERROR" "Failed to update package lists"
+        return 1
+    }
     
     # Install only essential packages
-    DEBIAN_FRONTEND=noninteractive sudo apt-get install -y --no-install-recommends \
+    DEBIAN_FRONTEND=noninteractive sudo apt-get -o Acquire::Check-Valid-Until=false \
+        -o Acquire::Check-Date=false install -y --no-install-recommends \
         curl \
         ca-certificates \
         git \
@@ -183,9 +179,26 @@ setup_time_sync() {
     
     # Debug: Check initial state
     log_message "DEBUG" "Checking initial system state..."
-    dpkg -l | grep chrony || log_message "DEBUG" "Chrony not found in package list"
-    ls -l /lib/systemd/system/chrony* || log_message "DEBUG" "No chrony service files found in /lib/systemd/system/"
-    ls -l /etc/systemd/system/chrony* || log_message "DEBUG" "No chrony service files found in /etc/systemd/system/"
+    log_message "DEBUG" "Current system time: $(date)"
+    
+    # Fix time immediately using HTTP
+    log_message "INFO" "Performing initial time sync..."
+    # Get time from Google
+    EPOCH=$(curl -sI 'google.com' | grep -i '^date:' | sed 's/^[Dd]ate: //g' | date -f - +%s)
+    if [ -n "$EPOCH" ]; then
+        log_message "INFO" "Setting system time from HTTP response..."
+        sudo date -s "@$EPOCH"
+    else
+        log_message "WARNING" "Failed to get time from HTTP, trying backup method..."
+        # Backup method using rdate
+        if ! command -v rdate &> /dev/null; then
+            DEBIAN_FRONTEND=noninteractive sudo apt-get update || true
+            DEBIAN_FRONTEND=noninteractive sudo apt-get install -y rdate || true
+        fi
+        sudo rdate -n -4 time.nist.gov || log_message "WARNING" "Failed to sync time with rdate"
+    fi
+    
+    log_message "DEBUG" "Time after initial sync: $(date)"
     
     # Remove conflicting packages
     log_message "INFO" "Removing conflicting packages..."
@@ -196,12 +209,19 @@ setup_time_sync() {
     # Clean up any existing chrony installation
     log_message "INFO" "Cleaning up existing chrony installation..."
     sudo apt-get remove --purge -y chrony || true
-    sudo apt-get autoremove -y
+    sudo apt-get autoremove -y || true
     
     # Install chrony
     log_message "INFO" "Installing chrony..."
-    DEBIAN_FRONTEND=noninteractive sudo apt-get update
-    DEBIAN_FRONTEND=noninteractive sudo apt-get install -y chrony
+    DEBIAN_FRONTEND=noninteractive sudo apt-get update || {
+        log_message "WARNING" "Initial apt-get update failed, trying with time override..."
+        sudo apt-get -o Acquire::Check-Valid-Until=false -o Acquire::Check-Date=false update
+    }
+    
+    DEBIAN_FRONTEND=noninteractive sudo apt-get install -y chrony || {
+        log_message "WARNING" "Standard installation failed, trying alternative method..."
+        sudo apt-get -o Acquire::Check-Valid-Until=false -o Acquire::Check-Date=false install -y chrony
+    }
     
     # Debug: Check installation results
     log_message "DEBUG" "Checking chrony installation..."
