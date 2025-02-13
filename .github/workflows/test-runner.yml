@@ -7,12 +7,11 @@ on:
 
 jobs:
   test-permissions:
-    runs-on: self-hosted  # Chạy trên self-hosted runner
+    runs-on: test-setup  # Chạy trên self-hosted runner
     steps:
-      - name: Checkout code
+      - nam      - name: Chf: always()
         uses: actions/checkout@v2
 
-      - name: Test User Info and Groups
         if: always()
         run: |
           echo "=== Testing User Info ==="
