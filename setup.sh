@@ -61,36 +61,58 @@ sudo apt update && sudo apt upgrade -y && sudo apt autoremove -y
 # Cài đặt các gói cần thiết
 echo "[INFO] Cài đặt các gói hỗ trợ..."
 
-# Aggressively remove all time-related packages and clean package state
-echo "[INFO] Removing all time synchronization packages..."
+# Hold problematic packages to prevent automatic installation
+echo "[INFO] Holding problematic packages..."
+sudo apt-mark hold systemd-timesyncd ntpsec ntp time-daemon || true
+
+# Force remove time-related packages using dpkg if needed
+echo "[INFO] Force removing time synchronization packages..."
+sudo dpkg --force-all -P systemd-timesyncd ntpsec ntp time-daemon || true
 sudo systemctl stop systemd-timesyncd || true
 sudo systemctl disable systemd-timesyncd || true
-sudo apt-get remove -y --purge ntpsec ntp systemd-timesyncd time-daemon || true
-sudo apt-get autoremove -y || true
+
+# Clean up package system
+echo "[INFO] Cleaning package system..."
+sudo apt-get update
+sudo apt-get install -f -y || true
+sudo apt-get autoremove -y
 sudo apt-get clean
 sudo rm -rf /var/lib/apt/lists/*
 sudo apt-get update
 
 # Install packages in groups with conflict resolution
 echo "[INFO] Installing base packages..."
-DEBIAN_FRONTEND=noninteractive sudo apt-get install -y --no-install-recommends curl jq git build-essential unzip
+DEBIAN_FRONTEND=noninteractive sudo apt-get install -y --no-install-recommends --fix-broken curl jq git build-essential unzip
 
 echo "[INFO] Installing Python and Node.js..."
-DEBIAN_FRONTEND=noninteractive sudo apt-get install -y --no-install-recommends python3 python3-pip nodejs npm
+DEBIAN_FRONTEND=noninteractive sudo apt-get install -y --no-install-recommends --fix-broken python3 python3-pip nodejs npm
 
+# Install chrony with special handling
 echo "[INFO] Installing and configuring chrony..."
-DEBIAN_FRONTEND=noninteractive sudo apt-get install -y --no-install-recommends chrony
+DEBIAN_FRONTEND=noninteractive sudo apt-get install -y --no-install-recommends --fix-broken chrony
+
+# Configure chrony
+echo "[INFO] Configuring chrony..."
+if [ -f /etc/chrony/chrony.conf ]; then
+    sudo cp /etc/chrony/chrony.conf /etc/chrony/chrony.conf.bak
+    echo "server pool.ntp.org iburst" | sudo tee /etc/chrony/chrony.conf
+fi
+
+# Restart chrony service
 sudo systemctl stop chronyd || true
 sudo systemctl disable chronyd || true
 sudo systemctl enable chronyd
 sudo systemctl start chronyd
 
-# Double check chrony status
+# Verify chrony status with detailed error handling
 echo "[INFO] Verifying chrony status..."
 if ! systemctl is-active --quiet chronyd; then
     echo "Warning: Chrony failed to start. Attempting to fix..."
-    sudo apt-get install --reinstall chrony
+    sudo apt-get install --reinstall -y chrony
     sudo systemctl restart chronyd
+    if ! systemctl is-active --quiet chronyd; then
+        echo "Warning: Chrony still not running. Time synchronization may be unavailable."
+    fi
 fi
 
 # Cài đặt Docker nếu chưa có
