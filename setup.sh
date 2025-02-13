@@ -105,6 +105,60 @@ setup_system() {
     git config --global --add safe.directory "*"
     git config --global core.fileMode false
     git config --global core.longpaths true
+
+    # Setup directory permissions
+    log_message "INFO" "Setting up directory permissions..."
+    
+    # Create and set permissions for common directories
+    sudo mkdir -p \
+        /usr/local/bin \
+        /usr/local/aws-cli \
+        /usr/local/lib \
+        /usr/local/include \
+        /usr/local/share \
+        /usr/local/etc \
+        /var/lib/docker \
+        "${WORKSPACE_BASE}/_temp" \
+        /tmp/runner
+
+    # Set ownership for directories
+    sudo chown -R "$USER:$USER" \
+        /usr/local/bin \
+        /usr/local/aws-cli \
+        /usr/local/lib \
+        /usr/local/include \
+        /usr/local/share \
+        /usr/local/etc \
+        "${WORKSPACE_BASE}/_temp" \
+        /tmp/runner
+
+    # Set directory permissions
+    sudo chmod -R 755 \
+        /usr/local/bin \
+        /usr/local/aws-cli \
+        /usr/local/lib \
+        /usr/local/include \
+        /usr/local/share \
+        /usr/local/etc
+
+    # Set more permissive permissions for temp directories
+    sudo chmod -R 777 \
+        "${WORKSPACE_BASE}/_temp" \
+        /tmp/runner
+
+    # Ensure Docker socket permissions
+    sudo chmod 666 /var/run/docker.sock
+    
+    # Create .npm directory for global installations
+    mkdir -p ~/.npm
+    sudo chown -R "$USER:$USER" ~/.npm
+
+    # Install AWS CLI
+    log_message "INFO" "Installing AWS CLI..."
+    curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+    unzip -o awscliv2.zip
+    sudo ./aws/install --update
+    rm -rf aws awscliv2.zip
 }
 
 setup_docker() {
