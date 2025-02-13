@@ -114,3 +114,17 @@ sudo rm -rf /opt/actions-runner
 - Đảm bảo đủ dung lượng ổ cứng cho Docker images
 - Backup dữ liệu quan trọng trước khi chạy lại script với `force`
 - Kiểm tra kết nối internet trước khi chạy script
+
+
+
+https://github.dev/Gravity-Global/gravity-jenkins-automation-performance-check-v2-10-2023/.github/workflows/tool.yml@master
+https://github.dev/Gravity-Global/gravity-jenkins-automation-frontend-checklist-v2-10-2023/.github/workflows/tool.yml@master
+https://github.dev/Gravity-Global/gravity-jenkins-automation-spell-check-v2-10-2023/.github/workflows/tool.yml@master
+https://github.dev/Gravity-Global/gravity-jenkins-automation-redirect-check-v2-10-2023/.github/workflows/tool.yml@master
+https://github.dev/Gravity-Global/gravity-jenkins-automation-links-check-v2-10-2023/.github/workflows/tool.yml@master
+https://github.dev/Gravity-Global/gravity-jenkins-automation-sitemap-check-urls-v2-10-2023/.github/workflows/tool.yml@master
+https://github.dev/Gravity-Global/gravity-jenkins-automation-check-google-indexed-v2-10-2023/.github/workflows/tool.yml@master
+https://github.dev/Gravity-Global/gravity-jenkins-automation-functionalities-check-v2-10-2023/.github/workflows/tool.yml@master
+https://github.dev/Gravity-Global/gravity-jenkins-automation-screenshot-v2-10-2023/.github/workflows/tool.yml@master
+https://github.dev/Gravity-Global/gravity-jenkins-automation-compare-headers-10-2023/.github/workflows/tool.yml@master
+https://github.dev/Gravity-Global/gravity-master-report-03-2022/.github/workflows/tool.yml@master

@@ -13,10 +13,18 @@ jobs:
         if: always()
         run: |
           echo "=== Cleaning Workspace ==="
-          WORKSPACE="/home/test/actions-runner/_work/gravity-sync-s3-report"
+          # Use GitHub Actions environment variables for workspace path
+          WORKSPACE="${GITHUB_WORKSPACE}"
+          RUNNER_TEMP="${RUNNER_TEMP:-/opt/actions-runner/_work/_temp}"
           
           # Force remove with sudo if exists
           if [ -d "$WORKSPACE" ]; then
+            # Fix permissions before removal
+            sudo chown -R $(id -u):$(id -g) "$WORKSPACE"
+            sudo chmod -R 755 "$WORKSPACE"
+            # Force remove git files first
+            sudo rm -rf "$WORKSPACE/.git" || true
+            # Then remove the rest
             sudo rm -rf "$WORKSPACE"
           fi
           
@@ -26,13 +34,14 @@ jobs:
           sudo chmod -R 755 "$WORKSPACE"
           
           # Also clean temp directory
-          sudo rm -rf /home/test/actions-runner/_work/_temp/*
-          sudo mkdir -p /home/test/actions-runner/_work/_temp
-          sudo chown -R test:test /home/test/actions-runner/_work/_temp
+          sudo rm -rf "${RUNNER_TEMP}/*"
+          sudo mkdir -p "$RUNNER_TEMP"
+          sudo chown -R test:test "$RUNNER_TEMP"
+          sudo chmod -R 755 "$RUNNER_TEMP"
 
       - name: Checkout code
         if: always()
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Fix Git Permissions
         if: always()

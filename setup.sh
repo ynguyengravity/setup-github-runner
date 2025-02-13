@@ -136,7 +136,6 @@ setup_system() {
         /usr/local/etc \
         /var/lib/docker \
         "${WORKSPACE_BASE}/_temp" \
-        "${WORKSPACE_BASE}/gravity-sync-s3-report" \
         /tmp/runner \
         ~/.aws
 
@@ -150,7 +149,6 @@ setup_system() {
         /usr/local/etc \
         "${WORKSPACE_BASE}" \
         "${WORKSPACE_BASE}/_temp" \
-        "${WORKSPACE_BASE}/gravity-sync-s3-report" \
         /tmp/runner \
         ~/.aws
 
@@ -166,7 +164,6 @@ setup_system() {
     # Set more permissive permissions for temp and workspace directories
     sudo chmod -R 777 \
         "${WORKSPACE_BASE}/_temp" \
-        "${WORKSPACE_BASE}/gravity-sync-s3-report" \
         /tmp/runner
 
     # Set AWS and NPM directory permissions
