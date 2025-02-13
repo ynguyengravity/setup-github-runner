@@ -8,20 +8,45 @@ LOG_FILE="/var/log/github-runner-setup.log"
 MAINTENANCE_SCRIPT="/usr/local/bin/runner-maintenance.sh"
 MAINT_LOG="/var/log/runner-maintenance.log"
 
-# Function to log messages
-log_message() {
-    local level="$1"
-    local message="$2"
-    echo "[$level] $message" | tee -a "$LOG_FILE"
+# Function to setup logging
+setup_logging() {
+    # Create log directory if it doesn't exist
+    sudo mkdir -p "$(dirname "$LOG_FILE")" "$(dirname "$MAINT_LOG")"
+    
+    # Create and set permissions for log files
+    sudo touch "$LOG_FILE" "$MAINT_LOG"
+    sudo chown "$SUDO_USER:$SUDO_USER" "$LOG_FILE" "$MAINT_LOG" 2>/dev/null || sudo chown "$USER:$USER" "$LOG_FILE" "$MAINT_LOG"
+    sudo chmod 644 "$LOG_FILE" "$MAINT_LOG"
+    
+    # Create and set permissions for lock file
+    sudo touch "$LOCK_FILE"
+    sudo chown "$SUDO_USER:$SUDO_USER" "$LOCK_FILE" 2>/dev/null || sudo chown "$USER:$USER" "$LOCK_FILE"
+    sudo chmod 644 "$LOCK_FILE"
+    
+    # Setup logging
+    exec 1> >(tee -a "$LOG_FILE")
+    exec 2>&1
 }
 
 # Function to check prerequisites
 check_prerequisites() {
     log_message "INFO" "Checking prerequisites..."
     
-    # Check if running as root
-    if [ "$EUID" -eq 0 ]; then
-        log_message "ERROR" "Please do not run as root"
+    # Get effective user
+    EFFECTIVE_USER=$(whoami)
+    if [ "$EFFECTIVE_USER" = "root" ]; then
+        if [ -z "$SUDO_USER" ]; then
+            log_message "ERROR" "Please run the script as a normal user with sudo privileges"
+            exit 1
+        fi
+        # If running with sudo, switch back to the original user
+        su - "$SUDO_USER" -c "cd $(pwd) && ./$(basename "$0") $*"
+        exit $?
+    fi
+    
+    # Check if user has sudo privileges
+    if ! sudo -v &>/dev/null; then
+        log_message "ERROR" "User must have sudo privileges"
         exit 1
     fi
     
@@ -38,11 +63,11 @@ check_prerequisites() {
     fi
 }
 
-# Function to setup logging
-setup_logging() {
-    sudo touch "$LOG_FILE" "$LOCK_FILE"
-    sudo chown $USER:$USER "$LOG_FILE" "$LOCK_FILE"
-    exec > >(tee -a "$LOG_FILE") 2>&1
+# Function to log messages
+log_message() {
+    local level="$1"
+    local message="$2"
+    echo "[$level] $message"
 }
 
 # Function to cleanup system
@@ -229,8 +254,8 @@ main() {
     local FORCE_RUN="$2"
     local REG_TOKEN="BBG5IMRUQDG65XTOSKAKCHLHVV464"
     
-    check_prerequisites "$RUNNER_ID" "$FORCE_RUN"
     setup_logging
+    check_prerequisites "$RUNNER_ID" "$FORCE_RUN"
     
     log_message "INFO" "Starting GitHub Runner setup..."
     
@@ -244,5 +269,5 @@ main() {
     log_message "INFO" "Setup completed successfully!"
 }
 
-# Execute main function
-main "$1" "$2"
+# Execute main function with all arguments
+main "$@"
