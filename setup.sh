@@ -79,11 +79,19 @@ sudo chmod -R 755 /usr/local/test-dir
 echo "[INFO] Cấp quyền cho Docker socket..."
 sudo chmod 666 /var/run/docker.sock
 
-# Test Docker và pull một số images phổ biến
+# Test Docker và cleanup
 echo "[INFO] Test Docker và pull images..."
+echo "Testing Docker pull..."
 docker pull ubuntu:20.04
 docker pull nginx:latest
 docker pull hello-world
+
+echo "Testing Docker run..."
+docker run --rm hello-world
+
+echo "Cleaning up Docker test..."
+docker rmi ubuntu:20.04 nginx:latest hello-world
+docker system prune -f
 
 # Tạo thư mục actions-runner với quyền user hiện tại
 echo "[INFO] Tạo thư mục actions-runner..."
