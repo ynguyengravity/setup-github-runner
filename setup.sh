@@ -181,24 +181,50 @@ EOF
 setup_time_sync() {
     log_message "INFO" "Setting up time synchronization..."
     
+    # Debug: Check initial state
+    log_message "DEBUG" "Checking initial system state..."
+    dpkg -l | grep chrony || log_message "DEBUG" "Chrony not found in package list"
+    ls -l /lib/systemd/system/chrony* || log_message "DEBUG" "No chrony service files found in /lib/systemd/system/"
+    ls -l /etc/systemd/system/chrony* || log_message "DEBUG" "No chrony service files found in /etc/systemd/system/"
+    
     # Remove conflicting packages
+    log_message "INFO" "Removing conflicting packages..."
     sudo systemctl stop systemd-timesyncd || true
     sudo systemctl disable systemd-timesyncd || true
     sudo apt-mark hold systemd-timesyncd || true
     
-    # Install chrony first
+    # Clean up any existing chrony installation
+    log_message "INFO" "Cleaning up existing chrony installation..."
+    sudo apt-get remove --purge -y chrony || true
+    sudo apt-get autoremove -y
+    
+    # Install chrony
     log_message "INFO" "Installing chrony..."
     DEBIAN_FRONTEND=noninteractive sudo apt-get update
     DEBIAN_FRONTEND=noninteractive sudo apt-get install -y chrony
     
+    # Debug: Check installation results
+    log_message "DEBUG" "Checking chrony installation..."
+    dpkg -l | grep chrony || log_message "ERROR" "Chrony installation failed"
+    ls -l /lib/systemd/system/chrony* || log_message "ERROR" "No chrony service files found after installation"
+    
+    # Reload systemd to recognize new service
+    log_message "INFO" "Reloading systemd..."
+    sudo systemctl daemon-reload
+    
     # Detect chrony service name
     local CHRONY_SERVICE=""
+    log_message "DEBUG" "Looking for chrony service..."
+    systemctl list-unit-files | grep -i chrony
+    
     if systemctl list-unit-files | grep -q "chronyd.service"; then
         CHRONY_SERVICE="chronyd"
     elif systemctl list-unit-files | grep -q "chrony.service"; then
         CHRONY_SERVICE="chrony"
     else
-        log_message "ERROR" "Could not find chrony service after installation"
+        log_message "ERROR" "Could not find chrony service after installation. Debug info:"
+        systemctl list-unit-files | grep -i chrony
+        journalctl -xe --no-pager | tail -n 50
         exit 1
     fi
     
@@ -206,6 +232,7 @@ setup_time_sync() {
     
     # Configure chrony
     if [ -f /etc/chrony/chrony.conf ]; then
+        log_message "INFO" "Configuring chrony..."
         sudo cp /etc/chrony/chrony.conf /etc/chrony/chrony.conf.bak
         cat << 'EOF' | sudo tee /etc/chrony/chrony.conf
 # Use multiple NTP servers for better reliability
@@ -226,12 +253,19 @@ rtcsync
 # Specify directory for log files
 logdir /var/log/chrony
 EOF
+    else
+        log_message "ERROR" "chrony.conf not found at /etc/chrony/chrony.conf"
+        ls -l /etc/chrony/ || log_message "ERROR" "/etc/chrony/ directory not found"
     fi
     
     # Start and verify chrony
     log_message "INFO" "Starting chrony service..."
-    sudo systemctl enable $CHRONY_SERVICE
-    sudo systemctl restart $CHRONY_SERVICE
+    sudo systemctl enable $CHRONY_SERVICE || log_message "ERROR" "Failed to enable $CHRONY_SERVICE"
+    sudo systemctl restart $CHRONY_SERVICE || {
+        log_message "ERROR" "Failed to restart $CHRONY_SERVICE. Service status:"
+        sudo systemctl status $CHRONY_SERVICE
+        journalctl -xe --no-pager | tail -n 50
+    }
     sleep 2  # Give chrony time to start
     
     # Check chrony status
@@ -241,10 +275,14 @@ EOF
     else
         log_message "WARNING" "Chrony failed to start. Attempting fix..."
         sudo apt-get install --reinstall -y chrony
+        sudo systemctl daemon-reload
         sudo systemctl restart $CHRONY_SERVICE
         if ! sudo systemctl is-active --quiet $CHRONY_SERVICE; then
-            log_message "ERROR" "Failed to start chrony service. Service status:"
+            log_message "ERROR" "Failed to start chrony service. Debug info:"
             sudo systemctl status $CHRONY_SERVICE
+            journalctl -xe --no-pager | tail -n 50
+            ls -l /var/log/chrony/ || true
+            cat /var/log/chrony/measurements.log || true
             exit 1
         fi
     fi
@@ -252,7 +290,10 @@ EOF
     # Verify time synchronization
     log_message "INFO" "Verifying time synchronization..."
     if ! sudo chronyc tracking; then
-        log_message "WARNING" "Could not verify time synchronization"
+        log_message "WARNING" "Could not verify time synchronization. Debug info:"
+        sudo chronyc sources
+        sudo chronyc tracking
+        sudo chronyc sourcestats
     fi
 }
 
