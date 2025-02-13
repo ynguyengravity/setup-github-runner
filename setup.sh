@@ -60,7 +60,24 @@ sudo apt update && sudo apt upgrade -y && sudo apt autoremove -y
 
 # Cài đặt các gói cần thiết
 echo "[INFO] Cài đặt các gói hỗ trợ..."
-sudo apt install -y curl jq git ntp build-essential unzip python3 python3-pip nodejs npm
+# Stop and disable systemd-timesyncd if it's running
+echo "[INFO] Stopping and disabling systemd-timesyncd..."
+sudo systemctl stop systemd-timesyncd
+sudo systemctl disable systemd-timesyncd
+
+# Remove conflicting packages
+echo "[INFO] Removing conflicting packages..."
+sudo apt remove -y ntpsec systemd-timesyncd || true
+
+# Install required packages
+echo "[INFO] Installing required packages..."
+sudo apt update
+sudo apt install -y curl jq git build-essential unzip python3 python3-pip nodejs npm chrony
+
+# Configure time synchronization with chrony
+echo "[INFO] Configuring chrony..."
+sudo systemctl enable chronyd
+sudo systemctl start chronyd
 
 # Cài đặt Docker nếu chưa có
 echo "[INFO] Kiểm tra Docker..."
