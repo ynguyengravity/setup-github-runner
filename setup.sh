@@ -61,27 +61,37 @@ sudo apt update && sudo apt upgrade -y && sudo apt autoremove -y
 # Cài đặt các gói cần thiết
 echo "[INFO] Cài đặt các gói hỗ trợ..."
 
-# First remove all potential conflicting time synchronization packages
-echo "[INFO] Removing conflicting time synchronization packages..."
-sudo apt remove -y ntpsec systemd-timesyncd ntp || true
-sudo apt autoremove -y || true
+# Aggressively remove all time-related packages and clean package state
+echo "[INFO] Removing all time synchronization packages..."
+sudo systemctl stop systemd-timesyncd || true
+sudo systemctl disable systemd-timesyncd || true
+sudo apt-get remove -y --purge ntpsec ntp systemd-timesyncd time-daemon || true
+sudo apt-get autoremove -y || true
+sudo apt-get clean
+sudo rm -rf /var/lib/apt/lists/*
+sudo apt-get update
 
-# Install packages in groups to better handle dependencies
+# Install packages in groups with conflict resolution
 echo "[INFO] Installing base packages..."
-sudo apt update
-sudo apt install -y curl jq git build-essential unzip
+DEBIAN_FRONTEND=noninteractive sudo apt-get install -y --no-install-recommends curl jq git build-essential unzip
 
 echo "[INFO] Installing Python and Node.js..."
-sudo apt install -y python3 python3-pip nodejs npm
+DEBIAN_FRONTEND=noninteractive sudo apt-get install -y --no-install-recommends python3 python3-pip nodejs npm
 
 echo "[INFO] Installing and configuring chrony..."
-sudo apt install -y chrony
+DEBIAN_FRONTEND=noninteractive sudo apt-get install -y --no-install-recommends chrony
+sudo systemctl stop chronyd || true
+sudo systemctl disable chronyd || true
 sudo systemctl enable chronyd
 sudo systemctl start chronyd
 
-# Verify chrony is running
+# Double check chrony status
 echo "[INFO] Verifying chrony status..."
-sudo systemctl status chronyd || echo "Warning: Chrony service status check failed"
+if ! systemctl is-active --quiet chronyd; then
+    echo "Warning: Chrony failed to start. Attempting to fix..."
+    sudo apt-get install --reinstall chrony
+    sudo systemctl restart chronyd
+fi
 
 # Cài đặt Docker nếu chưa có
 echo "[INFO] Kiểm tra Docker..."
