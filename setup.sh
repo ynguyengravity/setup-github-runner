@@ -20,7 +20,7 @@ touch "$LOCK_FILE"
 echo "[INFO] Nhận tham số đầu vào..."
 RUNNER_ID=$1
 # REG_TOKEN=$2
-REG_TOKEN="BBG5IMTYJCQXTBCD246RCHDHVTFTC"
+REG_TOKEN="BBG5IMVLOR7VHP4BKW2ZQ7DHVVQYE"
 if [ -z "$RUNNER_ID" ]; then
     echo "[ERROR] RUNNER_ID không được để trống. Hãy cung cấp một ID."
     exit 1
