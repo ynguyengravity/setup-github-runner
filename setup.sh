@@ -136,7 +136,9 @@ setup_system() {
         /usr/local/etc \
         /var/lib/docker \
         "${WORKSPACE_BASE}/_temp" \
-        /tmp/runner
+        "${WORKSPACE_BASE}/gravity-sync-s3-report" \
+        /tmp/runner \
+        ~/.aws
 
     # Set ownership for directories
     sudo chown -R "$USER:$USER" \
@@ -146,8 +148,11 @@ setup_system() {
         /usr/local/include \
         /usr/local/share \
         /usr/local/etc \
+        "${WORKSPACE_BASE}" \
         "${WORKSPACE_BASE}/_temp" \
-        /tmp/runner
+        "${WORKSPACE_BASE}/gravity-sync-s3-report" \
+        /tmp/runner \
+        ~/.aws
 
     # Set directory permissions
     sudo chmod -R 755 \
@@ -158,17 +163,22 @@ setup_system() {
         /usr/local/share \
         /usr/local/etc
 
-    # Set more permissive permissions for temp directories
+    # Set more permissive permissions for temp and workspace directories
     sudo chmod -R 777 \
         "${WORKSPACE_BASE}/_temp" \
+        "${WORKSPACE_BASE}/gravity-sync-s3-report" \
         /tmp/runner
 
-    # Ensure Docker socket permissions
-    sudo chmod 666 /var/run/docker.sock
+    # Set AWS and NPM directory permissions
+    sudo chmod 700 ~/.aws
     
     # Create .npm directory for global installations
     mkdir -p ~/.npm
     sudo chown -R "$USER:$USER" ~/.npm
+    sudo chmod 775 ~/.npm
+
+    # Ensure Docker socket permissions
+    sudo chmod 666 /var/run/docker.sock
 
     # Install AWS CLI
     log_message "INFO" "Installing AWS CLI..."
