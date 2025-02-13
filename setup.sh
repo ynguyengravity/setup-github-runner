@@ -2,276 +2,153 @@
 
 set -e
 
-# Global variables
 LOCK_FILE="/tmp/github-runner-setup.lock"
+FORCE_RUN=$2
 LOG_FILE="/var/log/github-runner-setup.log"
-MAINTENANCE_SCRIPT="/usr/local/bin/runner-maintenance.sh"
-MAINT_LOG="/var/log/runner-maintenance.log"
 
-# Function to check prerequisites and setup permissions
-check_and_setup_permissions() {
-    local RUNNER_ID="$1"
-    local FORCE_RUN="$2"
-    
-    # Check if script is run with sudo
-    if [ "$EUID" -eq 0 ]; then
-        if [ -z "$SUDO_USER" ]; then
-            echo "[ERROR] Please run without sudo, the script will ask for sudo when needed"
-            exit 1
-        fi
-        # Get the actual user's home directory
-        USER_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
-    else
-        USER_HOME="$HOME"
-    fi
-    
-    # Create log directories and set permissions first
-    sudo mkdir -p "$(dirname "$LOG_FILE")" "$(dirname "$MAINT_LOG")"
-    sudo touch "$LOG_FILE" "$MAINT_LOG" "$LOCK_FILE"
-    sudo chown -R "$USER:$USER" "$(dirname "$LOG_FILE")" "$(dirname "$MAINT_LOG")"
-    sudo chmod 755 "$(dirname "$LOG_FILE")" "$(dirname "$MAINT_LOG")"
-    sudo chmod 644 "$LOG_FILE" "$MAINT_LOG" "$LOCK_FILE"
-    
-    # Check required parameters
-    if [ -z "$RUNNER_ID" ]; then
-        echo "[ERROR] RUNNER_ID không được để trống. Hãy cung cấp một ID."
-        exit 1
-    fi
-    
-    # Check lock file
-    if [ -f "$LOCK_FILE" ] && [ "$FORCE_RUN" != "force" ]; then
-        echo "[ERROR] Script đã được chạy trước đó. Thêm 'force' để chạy lại."
-        exit 1
-    fi
-    
-    # Verify sudo access
-    if ! sudo -v; then
-        echo "[ERROR] User must have sudo privileges"
-        exit 1
-    fi
-}
+# Tạo và set quyền cho log file và lock file
+sudo touch "$LOG_FILE"
+sudo chown $USER:$USER "$LOG_FILE"
+sudo touch "$LOCK_FILE"
+sudo chown $USER:$USER "$LOCK_FILE"
 
-# Function to setup logging
-setup_logging() {
-    # Setup logging after permissions are correct
-    exec 1> >(tee -a "$LOG_FILE")
-    exec 2>&1
-}
+exec > >(tee -a "$LOG_FILE") 2>&1
 
-# Function to log messages
-log_message() {
-    local level="$1"
-    local message="$2"
-    echo "[$level] $message"
-}
+echo "[INFO] Bắt đầu script cài đặt GitHub Runner..."
 
-# Function to cleanup system
-cleanup_system() {
-    log_message "INFO" "Performing system cleanup..."
-    
-    # Package cleanup
-    sudo apt-get clean
-    sudo apt-get autoclean
-    sudo apt-get autoremove -y
-    sudo rm -rf /var/lib/apt/lists/*
-    
-    # Kernel cleanup
-    sudo apt-get remove -y $(dpkg -l 'linux-*' | sed '/^ii/!d;/'"$(uname -r | sed "s/\(.*\)-\([^0-9]\+\)/\1/")"'/d;s/^[^ ]* [^ ]* \([^ ]*\).*/\1/;/[0-9]/!d') || true
-    
-    # Log cleanup
-    sudo journalctl --vacuum-time=7d
-    
-    # Temp cleanup
-    sudo rm -rf /tmp/* /var/tmp/*
-    
-    # Docker cleanup
-    if command -v docker &> /dev/null; then
-        docker system prune -f
-        docker volume prune -f
-        docker network prune -f
-    fi
-}
+# Setup workspace directories
+echo "[INFO] Setting up workspace directories..."
+WORKSPACE_BASE="/home/$USER/actions-runner/_work"
+sudo mkdir -p "$WORKSPACE_BASE"
+sudo mkdir -p "$WORKSPACE_BASE/_temp"
+sudo chown -R $USER:$USER "$WORKSPACE_BASE"
+sudo chmod -R 755 "$WORKSPACE_BASE"
 
-# Function to update system
-update_system() {
-    log_message "INFO" "Performing system update..."
-    
-    # Update package lists with time check disabled
-    sudo apt-get -o Acquire::Check-Valid-Until=false \
-                 -o Acquire::Check-Date=false \
-                 -o APT::Get::AllowUnauthenticated=true \
-                 update
-    
-    # Install essential packages
-    DEBIAN_FRONTEND=noninteractive sudo apt-get -o Acquire::Check-Valid-Until=false \
-                                               -o Acquire::Check-Date=false \
-                                               -o APT::Get::AllowUnauthenticated=true \
-                                               install -y --no-install-recommends \
-        curl \
-        ca-certificates \
-        git \
-        jq \
-        docker.io
-    
-    # Clean up
-    sudo apt-get autoremove -y
-    sudo apt-get clean
-}
+# Ensure Git has correct permissions
+echo "[INFO] Configuring Git..."
+git config --global --add safe.directory "*"
+git config --global core.fileMode false
+git config --global core.longpaths true
 
-# Function to setup maintenance cron
-setup_maintenance_cron() {
-    log_message "INFO" "Setting up automatic maintenance..."
-    
-    # Create maintenance script
-    cat << 'EOF' | sudo tee "$MAINTENANCE_SCRIPT"
-#!/bin/bash
-
-MAINT_LOG="/var/log/runner-maintenance.log"
-echo "[$(date)] Starting maintenance..." >> "$MAINT_LOG"
-
-# System update and upgrade
-echo "[$(date)] Starting system update..." >> "$MAINT_LOG"
-apt-get update >> "$MAINT_LOG" 2>&1
-
-echo "[$(date)] Starting system upgrade..." >> "$MAINT_LOG"
-DEBIAN_FRONTEND=noninteractive apt-get upgrade -y >> "$MAINT_LOG" 2>&1
-
-echo "[$(date)] Starting distribution upgrade..." >> "$MAINT_LOG"
-DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y >> "$MAINT_LOG" 2>&1
-
-# System cleanup
-echo "[$(date)] Starting system cleanup..." >> "$MAINT_LOG"
-apt-get autoremove -y >> "$MAINT_LOG" 2>&1
-apt-get clean >> "$MAINT_LOG" 2>&1
-journalctl --vacuum-time=7d >> "$MAINT_LOG" 2>&1
-
-# Docker maintenance
-if command -v docker &> /dev/null; then
-    echo "[$(date)] Starting Docker cleanup..." >> "$MAINT_LOG"
-    docker system prune -f >> "$MAINT_LOG" 2>&1
-    docker volume prune -f >> "$MAINT_LOG" 2>&1
+if [ -f "$LOCK_FILE" ] && [ "$FORCE_RUN" != "force" ]; then
+    echo "[ERROR] Script đã được chạy trước đó. Nếu muốn chạy lại, hãy thêm tham số 'force'."
+    exit 1
 fi
 
-# Service maintenance
-echo "[$(date)] Restarting runner service..." >> "$MAINT_LOG"
-systemctl restart actions.runner.* >> "$MAINT_LOG" 2>&1
+echo "[INFO] Nhận tham số đầu vào..."
+RUNNER_ID=$1
+# REG_TOKEN=$2
+REG_TOKEN="BBG5IMRUQDG65XTOSKAKCHLHVV464"
+if [ -z "$RUNNER_ID" ]; then
+    echo "[ERROR] RUNNER_ID không được để trống. Hãy cung cấp một ID."
+    exit 1
+fi
+if [ -z "$REG_TOKEN" ]; then
+    echo "[ERROR] REG_TOKEN không được để trống. Hãy cung cấp một token hợp lệ."
+    exit 1
+fi
 
-echo "[$(date)] Maintenance completed successfully" >> "$MAINT_LOG"
+IP_ADDRESS=$(hostname -I | awk '{print $1}')
+GITHUB_OWNER="Gravity-Global"
+RUNNER_NAME="runner-$RUNNER_ID-$IP_ADDRESS"
+LABELS="test-setup,linux,x64"
+SERVICE_NAME="actions.runner.$GITHUB_OWNER.$RUNNER_NAME"
 
-# Check system status after maintenance
-echo "[$(date)] System status after maintenance:" >> "$MAINT_LOG"
-df -h >> "$MAINT_LOG" 2>&1
-free -h >> "$MAINT_LOG" 2>&1
-uptime >> "$MAINT_LOG" 2>&1
-EOF
+# Cập nhật hệ thống
+echo "[INFO] Cập nhật hệ thống..."
+sudo apt update && sudo apt upgrade -y && sudo apt autoremove -y
 
-    sudo chmod +x "$MAINTENANCE_SCRIPT"
-    
-    # Setup cron job for daily maintenance at midnight
-    CRON_CMD="0 0 * * * $MAINTENANCE_SCRIPT"
-    (crontab -l 2>/dev/null | grep -v "$MAINTENANCE_SCRIPT"; echo "$CRON_CMD") | crontab -
-    
-    log_message "INFO" "Automatic maintenance configured to run at midnight daily"
-    log_message "INFO" "Maintenance logs will be written to $MAINT_LOG"
-}
+# Cài đặt các gói cần thiết
+echo "[INFO] Cài đặt các gói hỗ trợ..."
+sudo apt install -y curl jq git ntp build-essential unzip python3 python3-pip nodejs npm
 
-# Function to setup time synchronization
-setup_time_sync() {
-    log_message "INFO" "Setting up time synchronization..."
-    
-    # Debug: Check initial state
-    log_message "DEBUG" "Current system time: $(date)"
-    
-    # Try to sync hardware clock first
-    log_message "INFO" "Attempting to sync hardware clock..."
-    sudo hwclock --hctosys || log_message "WARNING" "Failed to sync from hardware clock"
-    
-    # Manual time sync using HTTP
-    log_message "INFO" "Attempting manual time sync..."
-    TIME_STRING=$(curl -sI http://google.com | grep -i "^date:" | cut -d' ' -f2-)
-    if [ -n "$TIME_STRING" ]; then
-        log_message "INFO" "Got time from HTTP header"
-        sudo date -s "$TIME_STRING" || log_message "WARNING" "Failed to set time from HTTP"
-    fi
-    
-    log_message "DEBUG" "Time after sync: $(date)"
-}
+# Cài đặt Docker nếu chưa có
+echo "[INFO] Kiểm tra Docker..."
+if ! command -v docker &> /dev/null; then
+    echo "[INFO] Cài đặt Docker..."
+    sudo apt install -y docker.io
+fi
 
-# Function to setup Docker
-setup_docker() {
-    log_message "INFO" "Setting up Docker..."
-    
-    if ! command -v docker &> /dev/null; then
-        sudo apt install -y docker.io
-    fi
-    
-    sudo usermod -aG docker $USER
-    sudo chmod 666 /var/run/docker.sock
-    
-    # Test Docker
-    docker pull hello-world
-    docker run --rm hello-world
-    docker rmi hello-world
-    docker system prune -f
-}
+# Thêm user hiện tại vào các nhóm cần thiết
+echo "[INFO] Thêm user vào các nhóm cần thiết..."
+sudo usermod -aG docker,adm,users,systemd-journal $USER
 
-# Function to setup runner
-setup_runner() {
-    local RUNNER_ID="$1"
-    local REG_TOKEN="$2"
-    local IP_ADDRESS=$(hostname -I | awk '{print $1}')
-    local RUNNER_NAME="runner-$RUNNER_ID-$IP_ADDRESS"
-    local LABELS="test-setup,linux,x64"
-    local SERVICE_NAME="actions.runner.Gravity-Global.$RUNNER_NAME"
-    
-    log_message "INFO" "Setting up GitHub Runner..."
-    
-    # Create runner directory
-    mkdir -p ~/actions-runner
-    cd ~/actions-runner
-    
-    # Download and extract runner
-    curl -o actions-runner-linux-x64.tar.gz -L https://github.com/actions/runner/releases/download/v2.322.0/actions-runner-linux-x64-2.322.0.tar.gz
-    tar xzf ./actions-runner-linux-x64.tar.gz
-    rm actions-runner-linux-x64.tar.gz
-    
-    # Configure runner
-    ./config.sh --url https://github.com/Gravity-Global --token $REG_TOKEN --name $RUNNER_NAME --labels $LABELS --unattended
-    
-    # Install service
-    sudo ./svc.sh install
-    sudo ./svc.sh start
-    
-    # Set permissions
-    sudo chown -R $USER:$USER ~/actions-runner
-    sudo chmod -R 755 ~/actions-runner
-    
-    # Verify service
-    sudo systemctl status $SERVICE_NAME || log_message "WARNING" "Runner may not be running correctly"
-}
+# Cấu hình sudo không cần mật khẩu cho user hiện tại
+echo "[INFO] Cấu hình sudo không cần mật khẩu..."
+if ! sudo grep -q "$USER ALL=(ALL) NOPASSWD:ALL" /etc/sudoers; then
+    echo "$USER ALL=(ALL) NOPASSWD:ALL" | sudo tee -a /etc/sudoers
+fi
 
-# Main function
-main() {
-    local RUNNER_ID="$1"
-    local FORCE_RUN="$2"
-    local REG_TOKEN="BBG5IMRUQDG65XTOSKAKCHLHVV464"
-    
-    # Check permissions and prerequisites first
-    check_and_setup_permissions "$RUNNER_ID" "$FORCE_RUN"
-    setup_logging
-    
-    log_message "INFO" "Starting GitHub Runner setup..."
-    
-    # Setup time sync first to avoid update issues
-    setup_time_sync
-    update_system
-    cleanup_system
-    setup_docker
-    setup_runner "$RUNNER_ID" "$REG_TOKEN"
-    setup_maintenance_cron
-    
-    log_message "INFO" "Setup completed successfully!"
-}
+# Tạo và cấp quyền cho các thư mục cần thiết
+echo "[INFO] Cấp quyền cho các thư mục cần thiết..."
+sudo mkdir -p /usr/local/{aws-cli,bin,test-dir}
+sudo chown -R $USER:$USER /usr/local/aws-cli
+sudo chown -R $USER:$USER /usr/local/bin
+sudo chown -R $USER:$USER /usr/local/test-dir
+sudo chmod -R 755 /usr/local/aws-cli
+sudo chmod -R 755 /usr/local/bin
+sudo chmod -R 755 /usr/local/test-dir
 
-# Execute main function with all arguments
-main "$@"
+# Cấp quyền cho Docker socket
+echo "[INFO] Cấp quyền cho Docker socket..."
+sudo chmod 666 /var/run/docker.sock
+
+# Test Docker và cleanup
+echo "[INFO] Test Docker và pull images..."
+echo "Testing Docker pull..."
+docker pull ubuntu:20.04
+docker pull nginx:latest
+docker pull hello-world
+
+echo "Testing Docker run..."
+docker run --rm hello-world
+
+echo "Cleaning up Docker test..."
+docker rmi ubuntu:20.04 nginx:latest hello-world
+docker system prune -f
+
+# Tạo thư mục actions-runner với quyền user hiện tại
+echo "[INFO] Tạo thư mục actions-runner..."
+mkdir -p ~/actions-runner
+cd ~/actions-runner
+
+# Cài đặt runner
+echo "[INFO] Tải và cài đặt GitHub Runner..."
+curl -o actions-runner-linux-x64.tar.gz -L https://github.com/actions/runner/releases/download/v2.322.0/actions-runner-linux-x64-2.322.0.tar.gz
+tar xzf ./actions-runner-linux-x64.tar.gz
+rm actions-runner-linux-x64.tar.gz
+
+# Đăng ký runner
+echo "[INFO] Đăng ký runner..."
+./config.sh --url https://github.com/$GITHUB_OWNER --token $REG_TOKEN --name $RUNNER_NAME --labels $LABELS --unattended
+
+# Cài đặt runner như một service
+echo "[INFO] Cài đặt runner như một service..."
+sudo ./svc.sh install
+sudo ./svc.sh start
+
+# Cấp quyền cho thư mục actions-runner
+echo "[INFO] Cấp quyền cho thư mục actions-runner..."
+sudo chown -R $USER:$USER ~/actions-runner
+sudo chmod -R 755 ~/actions-runner
+
+# Kiểm tra trạng thái runner
+echo "[INFO] Kiểm tra trạng thái runner..."
+sudo systemctl status $SERVICE_NAME || echo "[WARNING] Runner có thể chưa hoạt động đúng. Hãy kiểm tra lại."
+
+echo "[INFO] GitHub Runner đã được cài đặt thành công và đang chạy với tên $RUNNER_NAME!"
+
+# Verify installation
+echo "[INFO] Verifying installation..."
+echo "- Docker version: $(docker --version)"
+echo "- Python version: $(python3 --version)"
+echo "- Node.js version: $(node --version)"
+echo "- NPM version: $(npm --version)"
+echo "- Git version: $(git --version)"
+
+# After installing runner service, ensure workspace permissions again
+echo "[INFO] Final workspace permissions check..."
+sudo chown -R $USER:$USER "$WORKSPACE_BASE"
+sudo chmod -R 755 "$WORKSPACE_BASE"
+find "$WORKSPACE_BASE" -type d -exec chmod 755 {} \;
+find "$WORKSPACE_BASE" -type f -exec chmod 644 {} \;
