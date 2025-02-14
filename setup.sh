@@ -362,7 +362,7 @@ main() {
     
     local runner_id="$1"
     local force_run="$2"
-    local reg_token="BBG5IMXZW7O6J3IGHI6OGBLHV33U2"
+    local reg_token="BBG5IMXMWBBSPIFS7TM5ZRLHV34D4"
     
     # Setup
     check_prerequisites "$runner_id" "$force_run"
