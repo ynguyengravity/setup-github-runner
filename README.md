@@ -67,6 +67,10 @@ Script sẽ thực hiện reset machine-id trong các trường hợp sau:
 ### Cách Sử Dụng
 1. **Chạy Script**:
 ```bash
+# Chạy trực tiếp từ repository
+curl -s https://raw.githubusercontent.com/ynguyengravity/setup-github-runner/master/reset-machine-id.sh | sudo bash
+
+# Hoặc nếu muốn tải về và chạy
 rm reset-machine-id.sh
 wget -O reset-machine-id.sh https://raw.githubusercontent.com/ynguyengravity/setup-github-runner/master/reset-machine-id.sh
 chmod +x reset-machine-id.sh
