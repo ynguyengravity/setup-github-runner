@@ -3,7 +3,7 @@
 set -e
 
 GITHUB_RUNNER_URL="https://github.com/actions/runner/releases/download/v2.322.0/actions-runner-linux-x64-2.322.0.tar.gz"
-TEMPL_URL="http://download.proxmox.com/images/system/ubuntu-23.04-standard_23.04-1_amd64.tar.zst"
+TEMPL_URL="http://download.proxmox.com/images/system/ubuntu-22.04-standard_22.04-1_amd64.tar.zst"
 PCTSIZE="20G"
 
 if [ -z "$GITHUB_TOKEN" ]; then
@@ -15,11 +15,12 @@ if [ -z "$OWNERREPO" ]; then
     echo
 fi
 
-
 log() {
   local text="$1"
   echo -e "\033[33m$text\033[0m"
 }
+
+log "-- Using Ubuntu 22.04 LTS (Jammy Jellyfish) template - supported until 2027"
 
 # Không cần hỏi IP và Gateway khi sử dụng DHCP
 # read -e -p "Container Address IP (CIDR format): " -i "192.168.0.123/24" IP_ADDR
