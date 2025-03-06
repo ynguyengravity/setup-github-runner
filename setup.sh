@@ -46,10 +46,10 @@ check_prerequisites() {
     local force_run="$2"
     
     # Check if script is run with sudo
-    if [ "$EUID" -eq 0 ]; then
-        echo "ERROR: Please run without sudo, the script will ask for sudo when needed"
-        exit 1
-    fi
+    # if [ "$EUID" -eq 0 ]; then
+    #     echo "ERROR: Please run without sudo, the script will ask for sudo when needed"
+    #     exit 1
+    # fi
     
     # Create log directory with sudo
     if [ ! -f "$LOG_FILE" ]; then
