@@ -10,10 +10,16 @@ if [ -z "$GITHUB_TOKEN" ]; then
     read -p "Enter github token: " GITHUB_TOKEN
     echo
 fi
-if [ -z "$OWNERREPO" ]; then
-    read -p "Enter github owner/repo: " OWNERREPO
+
+# Prompt for organization name
+if [ -z "$ORGNAME" ]; then
+    read -p "Enter organization name: " ORGNAME
     echo
 fi
+
+# Set organization URLs
+RUNNER_URL="https://github.com/${ORGNAME}"
+API_URL="https://api.github.com/orgs/${ORGNAME}/actions/runners/registration-token"
 
 log() {
   local text="$1"
@@ -21,6 +27,7 @@ log() {
 }
 
 log "-- Using Ubuntu 22.04 LTS (Jammy Jellyfish) template - supported until 2027"
+log "-- Setting up runner for Organization: ${ORGNAME}"
 
 # Không cần hỏi IP và Gateway khi sử dụng DHCP
 # read -e -p "Container Address IP (CIDR format): " -i "192.168.0.123/24" IP_ADDR
@@ -59,20 +66,30 @@ log "-- Installing docker"
 pct exec $PCTID -- bash -c "curl -qfsSL https://get.docker.com | sh"
 
 log "-- Getting runner installation token"
+log "-- Using API URL: $API_URL"
 RES=$(curl -q -L \
   -X POST \
   -H "Accept: application/vnd.github+json" \
   -H "Authorization: Bearer $GITHUB_TOKEN" \
   -H "X-GitHub-Api-Version: 2022-11-28" \
-  https://api.github.com/repos/$OWNERREPO/actions/runners/registration-token)
+  $API_URL)
+
+# Hiển thị response cho người dùng
+echo "API Response: $RES"
 
 RUNNER_TOKEN=$(echo $RES | grep -o '"token": "[^"]*' | grep -o '[^"]*$')
-  
+
+if [ -z "$RUNNER_TOKEN" ]; then
+    log "ERROR: Failed to get runner token. Please check your token and organization name."
+    log "Make sure your token has admin:org permission for organization runners."
+    exit 1
+fi
+
 log "-- Installing runner"
 pct exec $PCTID -- bash -c "mkdir actions-runner && cd actions-runner &&\
     curl -o $GITHUB_RUNNER_FILE -L $GITHUB_RUNNER_URL &&\
     tar xzf $GITHUB_RUNNER_FILE &&\
-    RUNNER_ALLOW_RUNASROOT=1 ./config.sh --unattended --url https://github.com/$OWNERREPO --token $RUNNER_TOKEN &&\
+    RUNNER_ALLOW_RUNASROOT=1 ./config.sh --unattended --url $RUNNER_URL --token $RUNNER_TOKEN &&\
     ./svc.sh install root &&\
     ./svc.sh start"
 
