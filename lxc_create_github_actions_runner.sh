@@ -165,7 +165,7 @@ pct exec $PCTID -- bash -c "export LANG=en_US.UTF-8 && \
 
 # Configure runner service to start automatically on boot
 log "-- Configuring runner service to start automatically on boot"
-pct exec $PCTID -- bash -c "systemctl enable actions.runner.${ORGNAME}-github-runner-${PCTID}-${CURRENT_DATE}.${PCTID}-${CURRENT_DATE}.service"
+pct exec $PCTID -- bash -c "systemctl enable actions.runner.${ORGNAME}.github-runner-${PCTID}-${CURRENT_DATE}.service"
 
 # Add locale settings to container's .bashrc
 pct exec $PCTID -- bash -c "echo 'export LANG=en_US.UTF-8' >> /root/.bashrc"
@@ -180,11 +180,11 @@ pct exec $PCTID -- bash -c "ln -sf /usr/local/bin/aws_completer /usr/bin/aws_com
 
 # Add AWS CLI to GitHub Actions runner service environment
 log "-- Adding AWS CLI to GitHub Actions runner service environment"
-pct exec $PCTID -- bash -c "mkdir -p /etc/systemd/system/actions.runner.${ORGNAME}-github-runner-${PCTID}-${CURRENT_DATE}.${PCTID}-${CURRENT_DATE}.service.d/"
-pct exec $PCTID -- bash -c "echo '[Service]' > /etc/systemd/system/actions.runner.${ORGNAME}-github-runner-${PCTID}-${CURRENT_DATE}.${PCTID}-${CURRENT_DATE}.service.d/path.conf"
-pct exec $PCTID -- bash -c "echo 'Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' >> /etc/systemd/system/actions.runner.${ORGNAME}-github-runner-${PCTID}-${CURRENT_DATE}.${PCTID}-${CURRENT_DATE}.service.d/path.conf"
+pct exec $PCTID -- bash -c "mkdir -p /etc/systemd/system/actions.runner.${ORGNAME}.github-runner-${PCTID}-${CURRENT_DATE}.service.d/"
+pct exec $PCTID -- bash -c "echo '[Service]' > /etc/systemd/system/actions.runner.${ORGNAME}.github-runner-${PCTID}-${CURRENT_DATE}.service.d/path.conf"
+pct exec $PCTID -- bash -c "echo 'Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' >> /etc/systemd/system/actions.runner.${ORGNAME}.github-runner-${PCTID}-${CURRENT_DATE}.service.d/path.conf"
 pct exec $PCTID -- bash -c "systemctl daemon-reload"
-pct exec $PCTID -- bash -c "systemctl restart actions.runner.${ORGNAME}-github-runner-${PCTID}-${CURRENT_DATE}.${PCTID}-${CURRENT_DATE}.service || true"
+pct exec $PCTID -- bash -c "systemctl restart actions.runner.${ORGNAME}.github-runner-${PCTID}-${CURRENT_DATE}.service || true"
 
 log "-- Setup completed successfully!"
 log "-- Container ID: $PCTID is now running GitHub Actions runner for $ORGNAME"
