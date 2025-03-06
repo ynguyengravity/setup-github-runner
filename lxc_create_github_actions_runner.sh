@@ -72,6 +72,16 @@ pct exec $PCTID -- bash -c "export DEBIAN_FRONTEND=noninteractive && \
     apt install -y git curl software-properties-common apt-transport-https ca-certificates gnupg lsb-release && \
     passwd -d root"
 
+# Install Node.js and common packages
+log "-- Installing Node.js"
+pct exec $PCTID -- bash -c "export LANG=en_US.UTF-8 && \
+    export LC_ALL=en_US.UTF-8 && \
+    curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
+    apt-get install -y nodejs && \
+    npm install -g yarn && \
+    node --version && \
+    npm --version"
+
 #install docker
 log "-- Installing docker"
 pct exec $PCTID -- bash -c "export LANG=en_US.UTF-8 && \
@@ -88,6 +98,11 @@ pct exec $PCTID -- bash -c "export LANG=en_US.UTF-8 && \
     unzip awscliv2.zip && \
     ./aws/install && \
     rm -rf awscliv2.zip aws && \
+    ln -sf /usr/local/bin/aws /usr/bin/aws && \
+    ln -sf /usr/local/bin/aws_completer /usr/bin/aws_completer && \
+    echo 'export PATH=$PATH:/usr/local/bin:/usr/bin' >> /root/.bashrc && \
+    echo 'export PATH=$PATH:/usr/local/bin:/usr/bin' >> /etc/environment && \
+    source /etc/environment && \
     aws --version"
 
 log "-- Getting runner installation token"
@@ -131,9 +146,18 @@ pct exec $PCTID -- bash -c "echo 'export LC_ALL=en_US.UTF-8' >> /root/.bashrc"
 
 # Verify AWS CLI installation and ensure it's in PATH for runner sessions
 log "-- Verifying AWS CLI installation"
-pct exec $PCTID -- bash -c "aws --version || echo 'AWS CLI installation failed!'"
-pct exec $PCTID -- bash -c "echo 'export PATH=\$PATH:/usr/local/bin' >> /root/.bashrc"
-pct exec $PCTID -- bash -c "echo 'export PATH=\$PATH:/usr/local/bin' >> /etc/environment"
+pct exec $PCTID -- bash -c "which aws && aws --version || echo 'AWS CLI installation failed!'"
+pct exec $PCTID -- bash -c "echo 'Ensuring AWS CLI is in PATH...'"
+pct exec $PCTID -- bash -c "ln -sf /usr/local/bin/aws /usr/bin/aws"
+pct exec $PCTID -- bash -c "ln -sf /usr/local/bin/aws_completer /usr/bin/aws_completer"
+
+# Add AWS CLI to GitHub Actions runner service environment
+log "-- Adding AWS CLI to GitHub Actions runner service environment"
+pct exec $PCTID -- bash -c "mkdir -p /etc/systemd/system/actions.runner.${ORGNAME}-github-runner-${PCTID}-${CURRENT_DATE}.${PCTID}-${CURRENT_DATE}.service.d/"
+pct exec $PCTID -- bash -c "echo '[Service]' > /etc/systemd/system/actions.runner.${ORGNAME}-github-runner-${PCTID}-${CURRENT_DATE}.${PCTID}-${CURRENT_DATE}.service.d/path.conf"
+pct exec $PCTID -- bash -c "echo 'Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' >> /etc/systemd/system/actions.runner.${ORGNAME}-github-runner-${PCTID}-${CURRENT_DATE}.${PCTID}-${CURRENT_DATE}.service.d/path.conf"
+pct exec $PCTID -- bash -c "systemctl daemon-reload"
+pct exec $PCTID -- bash -c "systemctl restart actions.runner.${ORGNAME}-github-runner-${PCTID}-${CURRENT_DATE}.${PCTID}-${CURRENT_DATE}.service || true"
 
 log "-- Setup completed successfully!"
 log "-- Container ID: $PCTID is now running GitHub Actions runner for $ORGNAME"
