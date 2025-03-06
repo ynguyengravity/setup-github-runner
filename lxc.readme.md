@@ -59,7 +59,7 @@ chmod +x lxc_create_github_actions_runner.sh
 ### 2. Chạy Script
 
 ```bash
-./lxc_create_github_actions_runner.sh
+GITHUB_TOKEN="" bash ./lxc_create_github_actions_runner.sh
 ```
 
 Khi được yêu cầu, nhập GitHub token đã tạo ở bước trước.
