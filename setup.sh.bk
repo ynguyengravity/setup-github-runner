@@ -46,17 +46,17 @@ check_prerequisites() {
     local force_run="$2"
     
     # Check if script is run with sudo
-    # if [ "$EUID" -eq 0 ]; then
-    #     echo "ERROR: Please run without sudo, the script will ask for when needed"
-    #     exit 1
-    # fi
+    if [ "$EUID" -eq 0 ]; then
+        echo "ERROR: Please run without sudo, the script will ask for sudo when needed"
+        exit 1
+    fi
     
     # Create log directory with sudo
     if [ ! -f "$LOG_FILE" ]; then
-        mkdir -p "$(dirname "$LOG_FILE")"
-        touch "$LOG_FILE"
-        chown "$USER:$USER" "$LOG_FILE"
-        chmod 644 "$LOG_FILE"
+        sudo mkdir -p "$(dirname "$LOG_FILE")"
+        sudo touch "$LOG_FILE"
+        sudo chown "$USER:$USER" "$LOG_FILE"
+        sudo chmod 644 "$LOG_FILE"
     fi
     
     # Check required parameters
@@ -75,30 +75,30 @@ check_prerequisites() {
 setup_directories() {
     log_message "INFO" "Setting up directories..."
     
-    # Create lock file with if needed
+    # Create lock file with sudo if needed
     if [ ! -f "$LOCK_FILE" ]; then
-        touch "$LOCK_FILE"
-        chown "$USER:$USER" "$LOCK_FILE"
-        chmod 644 "$LOCK_FILE"
+        sudo touch "$LOCK_FILE"
+        sudo chown "$USER:$USER" "$LOCK_FILE"
+        sudo chmod 644 "$LOCK_FILE"
     fi
     
     # Create runner directories
-    mkdir -p "$RUNNER_DIR" "$WORKSPACE_BASE" "${WORKSPACE_BASE}/_temp"
-    chown -R "$USER:$USER" "$RUNNER_DIR"
-    chmod -R 755 "$RUNNER_DIR"
+    sudo mkdir -p "$RUNNER_DIR" "$WORKSPACE_BASE" "${WORKSPACE_BASE}/_temp"
+    sudo chown -R "$USER:$USER" "$RUNNER_DIR"
+    sudo chmod -R 755 "$RUNNER_DIR"
 }
 
 setup_system() {
     log_message "INFO" "Setting up system..."
     
     # Update system
-    apt-get -o Acquire::Check-Valid-Until=false \
+    sudo apt-get -o Acquire::Check-Valid-Until=false \
                  -o Acquire::Check-Date=false \
                  -o APT::Get::AllowUnauthenticated=true \
                  update
     
     # Install dependencies
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    DEBIAN_FRONTEND=noninteractive sudo apt-get install -y --no-install-recommends \
         curl \
         jq \
         git \
@@ -111,11 +111,11 @@ setup_system() {
         docker.io
     
     # Configure user permissions
-    usermod -aG docker,adm,users,systemd-journal "$USER"
+    sudo usermod -aG docker,adm,users,systemd-journal "$USER"
     
     # Configure sudo
-    if ! grep -q "$USER ALL=(ALL) NOPASSWD:ALL" /etc/sudoers; then
-        echo "$USER ALL=(ALL) NOPASSWD:ALL" | tee -a /etc/sudoers
+    if ! sudo grep -q "$USER ALL=(ALL) NOPASSWD:ALL" /etc/sudoers; then
+        echo "$USER ALL=(ALL) NOPASSWD:ALL" | sudo tee -a /etc/sudoers
     fi
     
     # Configure Git
@@ -127,7 +127,7 @@ setup_system() {
     log_message "INFO" "Setting up directory permissions..."
     
     # Create and set permissions for common directories
-    mkdir -p \
+    sudo mkdir -p \
         /usr/local/bin \
         /usr/local/aws-cli \
         /usr/local/lib \
@@ -140,7 +140,7 @@ setup_system() {
         ~/.aws
 
     # Set ownership for directories
-    chown -R "$USER:$USER" \
+    sudo chown -R "$USER:$USER" \
         /usr/local/bin \
         /usr/local/aws-cli \
         /usr/local/lib \
@@ -153,7 +153,7 @@ setup_system() {
         ~/.aws
 
     # Set directory permissions
-    chmod -R 755 \
+    sudo chmod -R 755 \
         /usr/local/bin \
         /usr/local/aws-cli \
         /usr/local/lib \
@@ -162,33 +162,33 @@ setup_system() {
         /usr/local/etc
 
     # Set more permissive permissions for temp and workspace directories
-    chmod -R 777 \
+    sudo chmod -R 777 \
         "${WORKSPACE_BASE}/_temp" \
         /tmp/runner
 
     # Set AWS and NPM directory permissions
-    chmod 700 ~/.aws
+    sudo chmod 700 ~/.aws
     
     # Create .npm directory for global installations
     mkdir -p ~/.npm
-    chown -R "$USER:$USER" ~/.npm
-    chmod 775 ~/.npm
+    sudo chown -R "$USER:$USER" ~/.npm
+    sudo chmod 775 ~/.npm
 
     # Ensure Docker socket permissions
-    chmod 666 /var/run/docker.sock
+    sudo chmod 666 /var/run/docker.sock
 
     # Install AWS CLI
     log_message "INFO" "Installing AWS CLI..."
     curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
     unzip -o awscliv2.zip
-    ./aws/install --update
+    sudo ./aws/install --update
     rm -rf aws awscliv2.zip
 }
 
 setup_docker() {
     log_message "INFO" "Setting up Docker..."
     
-    chmod 666 /var/run/docker.sock
+    sudo chmod 666 /var/run/docker.sock
     
     # Test Docker
     docker pull hello-world
@@ -220,15 +220,15 @@ install_runner() {
                 --unattended
     
     # Install service
-    ./svc.sh install
-    ./svc.sh start
+    sudo ./svc.sh install
+    sudo ./svc.sh start
 }
 
 setup_maintenance() {
     log_message "INFO" "Setting up maintenance scripts..."
     
     # Create daily maintenance script
-    cat << 'EOF' | tee "${MAINTENANCE_SCRIPT}_daily.sh"
+    cat << 'EOF' | sudo tee "${MAINTENANCE_SCRIPT}_daily.sh"
 #!/bin/bash
 
 # Log start of daily maintenance
@@ -247,7 +247,7 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] Daily maintenance completed"
 EOF
 
     # Create weekly maintenance script
-    cat << 'EOF' | tee "${MAINTENANCE_SCRIPT}_weekly.sh"
+    cat << 'EOF' | sudo tee "${MAINTENANCE_SCRIPT}_weekly.sh"
 #!/bin/bash
 
 # Log start of weekly maintenance
@@ -271,8 +271,8 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] Weekly maintenance completed"
 EOF
     
     # Set permissions
-    chmod +x "${MAINTENANCE_SCRIPT}_daily.sh"
-    chmod +x "${MAINTENANCE_SCRIPT}_weekly.sh"
+    sudo chmod +x "${MAINTENANCE_SCRIPT}_daily.sh"
+    sudo chmod +x "${MAINTENANCE_SCRIPT}_weekly.sh"
     
     # Setup maintenance schedules
     # Daily at 2 AM
@@ -287,9 +287,9 @@ verify_installation() {
     log_message "INFO" "Verifying installation..."
     
     # Check service status
-    if ! systemctl is-active --quiet "$service_name"; then
+    if ! sudo systemctl is-active --quiet "$service_name"; then
         log_message "WARNING" "Runner service is not active"
-        systemctl status "$service_name" || true
+        sudo systemctl status "$service_name" || true
     else
         log_message "INFO" "Runner service is active"
     fi
@@ -305,7 +305,7 @@ verify_installation() {
 
 cleanup() {
     log_message "INFO" "Cleaning up..."
-    rm -f "$LOCK_FILE"
+    sudo rm -f "$LOCK_FILE"
 }
 
 show_help() {
@@ -330,7 +330,7 @@ sync_time() {
     local time_string=$(curl -sI google.com | grep -i "^date:" | cut -d' ' -f2-)
     if [ -n "$time_string" ]; then
         log_message "INFO" "Setting time from Google's response..."
-        date -s "$time_string" && {
+        sudo date -s "$time_string" && {
             log_message "INFO" "Time synchronized successfully"
             return 0
         }
@@ -340,7 +340,7 @@ sync_time() {
     local time_string=$(curl -s http://worldtimeapi.org/api/timezone/Etc/UTC | grep -o '"datetime":"[^"]*"' | cut -d'"' -f4)
     if [ -n "$time_string" ]; then
         log_message "INFO" "Setting time from worldtimeapi.org..."
-        date -s "$time_string" && {
+        sudo date -s "$time_string" && {
             log_message "INFO" "Time synchronized successfully"
             return 0
         }
