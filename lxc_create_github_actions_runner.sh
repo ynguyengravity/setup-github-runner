@@ -54,14 +54,16 @@ pct create $PCTID $TEMPL_FILE \
     -features nesting=1,keyctl=1 \
     -net0 name=eth0,bridge=vmbr1,ip=dhcp,firewall=1,type=veth
 
-# Configure AppArmor profile for Docker in LXC
-log "-- Configuring AppArmor for Docker in LXC"
-pct set $PCTID -lxc.apparmor.profile=unconfined
-pct set $PCTID -lxc.cgroup.devices.allow="a"
-pct set $PCTID -lxc.cap.drop=""
-
 log "-- Resizing container to $PCTSIZE"
 pct resize $PCTID rootfs $PCTSIZE
+
+# Configure AppArmor profile for Docker in LXC
+log "-- Configuring AppArmor for Docker in LXC"
+# Use the pvesh command with proper raw config
+pvesh set /nodes/$(hostname -s)/lxc/$PCTID/config -raw lxc.apparmor.profile=unconfined
+pvesh set /nodes/$(hostname -s)/lxc/$PCTID/config -raw lxc.cgroup.devices.allow=a
+pvesh set /nodes/$(hostname -s)/lxc/$PCTID/config -raw lxc.cap.drop=
+
 log "-- Starting container"
 pct start $PCTID
 sleep 10
