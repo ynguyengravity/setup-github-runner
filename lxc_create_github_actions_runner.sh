@@ -5,15 +5,13 @@ set -e
 GITHUB_RUNNER_URL="https://github.com/actions/runner/releases/download/v2.322.0/actions-runner-linux-x64-2.322.0.tar.gz"
 TEMPL_URL="http://download.proxmox.com/images/system/ubuntu-22.04-standard_22.04-1_amd64.tar.zst"
 PCTSIZE="20G"
+RUNNER_LABELS="vn-gaqc-docker,test-setup"
+RUNNER_GROUP="VN-Team"
+ORGNAME="Gravity-Global"
+CURRENT_DATE=$(date +%Y%m%d)
 
 if [ -z "$GITHUB_TOKEN" ]; then
     read -p "Enter github token: " GITHUB_TOKEN
-    echo
-fi
-
-# Prompt for organization name
-if [ -z "$ORGNAME" ]; then
-    read -p "Enter organization name: " ORGNAME
     echo
 fi
 
@@ -28,6 +26,9 @@ log() {
 
 log "-- Using Ubuntu 22.04 LTS (Jammy Jellyfish) template - supported until 2027"
 log "-- Setting up runner for Organization: ${ORGNAME}"
+log "-- Using runner labels: ${RUNNER_LABELS}"
+log "-- Using runner group: ${RUNNER_GROUP}"
+log "-- Date: ${CURRENT_DATE}"
 
 # Không cần hỏi IP và Gateway khi sử dụng DHCP
 # read -e -p "Container Address IP (CIDR format): " -i "192.168.0.123/24" IP_ADDR
@@ -44,7 +45,7 @@ log "-- Creating LXC container with ID:$PCTID"
 pct create $PCTID $TEMPL_FILE \
     -arch amd64 \
     -ostype ubuntu \
-    -hostname github-runner-proxmox-$(openssl rand -hex 3) \
+    -hostname github-runner-${PCTID}-${CURRENT_DATE} \
     -cores 4 \
     -memory 4096 \
     -swap 4096 \
@@ -56,14 +57,26 @@ pct resize $PCTID rootfs $PCTSIZE
 log "-- Starting container"
 pct start $PCTID
 sleep 10
-log "-- Running updates"
-pct exec $PCTID -- bash -c "apt update -y &&\
-    apt install -y git curl &&\
+
+log "-- Configure locale settings"
+pct exec $PCTID -- bash -c "apt update -y && \
+    apt install -y locales && \
+    locale-gen en_US.UTF-8 && \
+    update-locale LANG=en_US.UTF-8 LANGUAGE=en_US LC_ALL=en_US.UTF-8"
+
+log "-- Running updates and installing base packages"
+pct exec $PCTID -- bash -c "export DEBIAN_FRONTEND=noninteractive && \
+    export LANG=en_US.UTF-8 && \
+    export LC_ALL=en_US.UTF-8 && \
+    apt update -y && \
+    apt install -y git curl software-properties-common apt-transport-https ca-certificates gnupg lsb-release && \
     passwd -d root"
 
 #install docker
 log "-- Installing docker"
-pct exec $PCTID -- bash -c "curl -qfsSL https://get.docker.com | sh"
+pct exec $PCTID -- bash -c "export LANG=en_US.UTF-8 && \
+    export LC_ALL=en_US.UTF-8 && \
+    curl -fsSL https://get.docker.com | sh"
 
 log "-- Getting runner installation token"
 log "-- Using API URL: $API_URL"
@@ -86,11 +99,28 @@ if [ -z "$RUNNER_TOKEN" ]; then
 fi
 
 log "-- Installing runner"
-pct exec $PCTID -- bash -c "mkdir actions-runner && cd actions-runner &&\
-    curl -o $GITHUB_RUNNER_FILE -L $GITHUB_RUNNER_URL &&\
-    tar xzf $GITHUB_RUNNER_FILE &&\
-    RUNNER_ALLOW_RUNASROOT=1 ./config.sh --unattended --url $RUNNER_URL --token $RUNNER_TOKEN &&\
-    ./svc.sh install root &&\
+pct exec $PCTID -- bash -c "export LANG=en_US.UTF-8 && \
+    export LC_ALL=en_US.UTF-8 && \
+    mkdir actions-runner && cd actions-runner && \
+    curl -o $GITHUB_RUNNER_FILE -L $GITHUB_RUNNER_URL && \
+    tar xzf $GITHUB_RUNNER_FILE && \
+    RUNNER_ALLOW_RUNASROOT=1 ./config.sh --unattended \
+    --url $RUNNER_URL \
+    --token $RUNNER_TOKEN \
+    --name github-runner-${PCTID}-${CURRENT_DATE} \
+    --labels $RUNNER_LABELS \
+    --runnergroup \"$RUNNER_GROUP\" && \
+    ./svc.sh install root && \
     ./svc.sh start"
+
+# Add locale settings to container's .bashrc
+pct exec $PCTID -- bash -c "echo 'export LANG=en_US.UTF-8' >> /root/.bashrc"
+pct exec $PCTID -- bash -c "echo 'export LC_ALL=en_US.UTF-8' >> /root/.bashrc"
+
+log "-- Setup completed successfully!"
+log "-- Container ID: $PCTID is now running GitHub Actions runner for $ORGNAME"
+log "-- Runner name: github-runner-${PCTID}-${CURRENT_DATE}"
+log "-- Runner labels: ${RUNNER_LABELS}"
+log "-- Runner group: ${RUNNER_GROUP}"
 
 rm $TEMPL_FILE

@@ -48,9 +48,9 @@ check_prerequisites() {
     # Check if script is run with sudo
     if [ "$EUID" -eq 0 ]; then
         echo "ERROR: Please run without sudo, the script will ask for sudo when needed"
-        exit 1
-    fi
-    
+    exit 1
+fi
+
     # Create log directory with sudo
     if [ ! -f "$LOG_FILE" ]; then
         sudo mkdir -p "$(dirname "$LOG_FILE")"
@@ -62,14 +62,14 @@ check_prerequisites() {
     # Check required parameters
     if [ -z "$runner_id" ]; then
         log_message "ERROR" "RUNNER_ID không được để trống. Hãy cung cấp một ID."
-        exit 1
-    fi
+    exit 1
+fi
     
     # Check lock file
     if [ -f "$LOCK_FILE" ] && [ "$force_run" != "force" ]; then
         log_message "ERROR" "Script đã được chạy trước đó. Thêm 'force' để chạy lại."
-        exit 1
-    fi
+    exit 1
+fi
 }
 
 setup_directories() {
@@ -114,10 +114,10 @@ setup_system() {
     sudo usermod -aG docker,adm,users,systemd-journal "$USER"
     
     # Configure sudo
-    if ! sudo grep -q "$USER ALL=(ALL) NOPASSWD:ALL" /etc/sudoers; then
-        echo "$USER ALL=(ALL) NOPASSWD:ALL" | sudo tee -a /etc/sudoers
-    fi
-    
+if ! sudo grep -q "$USER ALL=(ALL) NOPASSWD:ALL" /etc/sudoers; then
+    echo "$USER ALL=(ALL) NOPASSWD:ALL" | sudo tee -a /etc/sudoers
+fi
+
     # Configure Git
     git config --global --add safe.directory "*"
     git config --global core.fileMode false
@@ -209,9 +209,9 @@ install_runner() {
     # Download and extract runner
     curl -o actions-runner-linux-x64.tar.gz -L \
         https://github.com/actions/runner/releases/download/v2.322.0/actions-runner-linux-x64-2.322.0.tar.gz
-    tar xzf ./actions-runner-linux-x64.tar.gz
-    rm actions-runner-linux-x64.tar.gz
-    
+tar xzf ./actions-runner-linux-x64.tar.gz
+rm actions-runner-linux-x64.tar.gz
+
     # Configure runner
     ./config.sh --url https://github.com/Gravity-Global \
                 --token "$reg_token" \
@@ -220,8 +220,8 @@ install_runner() {
                 --unattended
     
     # Install service
-    sudo ./svc.sh install
-    sudo ./svc.sh start
+sudo ./svc.sh install
+sudo ./svc.sh start
 }
 
 setup_maintenance() {
