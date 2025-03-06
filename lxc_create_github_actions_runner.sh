@@ -52,6 +52,13 @@ pct create $PCTID $TEMPL_FILE \
     -storage local-lvm \
     -features nesting=1,keyctl=1 \
     -net0 name=eth0,bridge=vmbr1,ip=dhcp,firewall=1,type=veth
+
+# Configure AppArmor profile for Docker in LXC
+log "-- Configuring AppArmor for Docker in LXC"
+pct set $PCTID -lxc.apparmor.profile=unconfined
+pct set $PCTID -lxc.cgroup.devices.allow="a"
+pct set $PCTID -lxc.cap.drop=""
+
 log "-- Resizing container to $PCTSIZE"
 pct resize $PCTID rootfs $PCTSIZE
 log "-- Starting container"
@@ -72,21 +79,23 @@ pct exec $PCTID -- bash -c "export DEBIAN_FRONTEND=noninteractive && \
     apt install -y git curl software-properties-common apt-transport-https ca-certificates gnupg lsb-release && \
     passwd -d root"
 
-# Install Node.js and common packages
-log "-- Installing Node.js"
-pct exec $PCTID -- bash -c "export LANG=en_US.UTF-8 && \
-    export LC_ALL=en_US.UTF-8 && \
-    curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
-    apt-get install -y nodejs && \
-    npm install -g yarn && \
-    node --version && \
-    npm --version"
-
 #install docker
 log "-- Installing docker"
 pct exec $PCTID -- bash -c "export LANG=en_US.UTF-8 && \
     export LC_ALL=en_US.UTF-8 && \
     curl -fsSL https://get.docker.com | sh"
+
+# Configure Docker to work properly in LXC
+log "-- Configuring Docker for LXC environment"
+pct exec $PCTID -- bash -c "mkdir -p /etc/docker"
+pct exec $PCTID -- bash -c "echo '{\"storage-driver\": \"overlay2\", \"iptables\": false}' > /etc/docker/daemon.json"
+pct exec $PCTID -- bash -c "systemctl restart docker || true"
+pct exec $PCTID -- bash -c "docker info || true"
+
+# Configure AppArmor for Docker
+pct exec $PCTID -- bash -c "apt-get install -y apparmor-utils || true"
+pct exec $PCTID -- bash -c "systemctl disable apparmor || true"
+pct exec $PCTID -- bash -c "systemctl stop apparmor || true"
 
 # Install AWS CLI
 log "-- Installing AWS CLI"
@@ -139,6 +148,10 @@ pct exec $PCTID -- bash -c "export LANG=en_US.UTF-8 && \
     --runnergroup \"$RUNNER_GROUP\" && \
     ./svc.sh install root && \
     ./svc.sh start"
+
+# Configure runner service to start automatically on boot
+log "-- Configuring runner service to start automatically on boot"
+pct exec $PCTID -- bash -c "systemctl enable actions.runner.${ORGNAME}-github-runner-${PCTID}-${CURRENT_DATE}.${PCTID}-${CURRENT_DATE}.service"
 
 # Add locale settings to container's .bashrc
 pct exec $PCTID -- bash -c "echo 'export LANG=en_US.UTF-8' >> /root/.bashrc"
