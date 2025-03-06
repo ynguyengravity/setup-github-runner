@@ -57,12 +57,14 @@ pct create $PCTID $TEMPL_FILE \
 log "-- Resizing container to $PCTSIZE"
 pct resize $PCTID rootfs $PCTSIZE
 
-# Configure AppArmor profile for Docker in LXC
-log "-- Configuring AppArmor for Docker in LXC"
-# Use the pvesh command with proper raw config
-pvesh set /nodes/$(hostname -s)/lxc/$PCTID/config -raw lxc.apparmor.profile=unconfined
-pvesh set /nodes/$(hostname -s)/lxc/$PCTID/config -raw lxc.cgroup.devices.allow=a
-pvesh set /nodes/$(hostname -s)/lxc/$PCTID/config -raw lxc.cap.drop=
+# Configure LXC for Docker - direct file edit approach
+log "-- Configuring LXC container for Docker compatibility"
+# Directly editing the container config file
+CONTAINER_CONFIG="/etc/pve/lxc/${PCTID}.conf"
+echo "# Docker support configuration" >> $CONTAINER_CONFIG
+echo "lxc.apparmor.profile: unconfined" >> $CONTAINER_CONFIG
+echo "lxc.cgroup.devices.allow: a" >> $CONTAINER_CONFIG
+echo "lxc.cap.drop: " >> $CONTAINER_CONFIG
 
 log "-- Starting container"
 pct start $PCTID
@@ -91,14 +93,23 @@ pct exec $PCTID -- bash -c "export LANG=en_US.UTF-8 && \
 # Configure Docker to work properly in LXC
 log "-- Configuring Docker for LXC environment"
 pct exec $PCTID -- bash -c "mkdir -p /etc/docker"
-pct exec $PCTID -- bash -c "echo '{\"storage-driver\": \"overlay2\", \"iptables\": false}' > /etc/docker/daemon.json"
-pct exec $PCTID -- bash -c "systemctl restart docker || true"
-pct exec $PCTID -- bash -c "docker info || true"
+pct exec $PCTID -- bash -c "echo '{\"storage-driver\":\"overlay2\",\"iptables\":false}' > /etc/docker/daemon.json"
 
-# Configure AppArmor for Docker
-pct exec $PCTID -- bash -c "apt-get install -y apparmor-utils || true"
-pct exec $PCTID -- bash -c "systemctl disable apparmor || true"
-pct exec $PCTID -- bash -c "systemctl stop apparmor || true"
+# Create systemd override for Docker
+pct exec $PCTID -- bash -c "mkdir -p /etc/systemd/system/docker.service.d/"
+pct exec $PCTID -- bash -c "echo '[Service]' > /etc/systemd/system/docker.service.d/override.conf"
+pct exec $PCTID -- bash -c "echo 'ExecStart=' >> /etc/systemd/system/docker.service.d/override.conf"
+pct exec $PCTID -- bash -c "echo 'ExecStart=/usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock' >> /etc/systemd/system/docker.service.d/override.conf"
+
+# Remove AppArmor to prevent Docker issues
+pct exec $PCTID -- bash -c "apt-get update && apt-get install -y apparmor-utils"
+pct exec $PCTID -- bash -c "systemctl disable apparmor"
+pct exec $PCTID -- bash -c "systemctl stop apparmor"
+
+# Restart Docker with the new configuration
+pct exec $PCTID -- bash -c "systemctl daemon-reload"
+pct exec $PCTID -- bash -c "systemctl restart docker"
+pct exec $PCTID -- bash -c "docker run --rm hello-world || echo 'Docker test failed, but continuing...'"
 
 # Install AWS CLI
 log "-- Installing AWS CLI"
