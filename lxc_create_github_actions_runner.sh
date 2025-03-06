@@ -78,6 +78,18 @@ pct exec $PCTID -- bash -c "export LANG=en_US.UTF-8 && \
     export LC_ALL=en_US.UTF-8 && \
     curl -fsSL https://get.docker.com | sh"
 
+# Install AWS CLI
+log "-- Installing AWS CLI"
+pct exec $PCTID -- bash -c "export LANG=en_US.UTF-8 && \
+    export LC_ALL=en_US.UTF-8 && \
+    apt-get update && \
+    apt-get install -y unzip && \
+    curl 'https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip' -o 'awscliv2.zip' && \
+    unzip awscliv2.zip && \
+    ./aws/install && \
+    rm -rf awscliv2.zip aws && \
+    aws --version"
+
 log "-- Getting runner installation token"
 log "-- Using API URL: $API_URL"
 RES=$(curl -q -L \
@@ -116,6 +128,12 @@ pct exec $PCTID -- bash -c "export LANG=en_US.UTF-8 && \
 # Add locale settings to container's .bashrc
 pct exec $PCTID -- bash -c "echo 'export LANG=en_US.UTF-8' >> /root/.bashrc"
 pct exec $PCTID -- bash -c "echo 'export LC_ALL=en_US.UTF-8' >> /root/.bashrc"
+
+# Verify AWS CLI installation and ensure it's in PATH for runner sessions
+log "-- Verifying AWS CLI installation"
+pct exec $PCTID -- bash -c "aws --version || echo 'AWS CLI installation failed!'"
+pct exec $PCTID -- bash -c "echo 'export PATH=\$PATH:/usr/local/bin' >> /root/.bashrc"
+pct exec $PCTID -- bash -c "echo 'export PATH=\$PATH:/usr/local/bin' >> /etc/environment"
 
 log "-- Setup completed successfully!"
 log "-- Container ID: $PCTID is now running GitHub Actions runner for $ORGNAME"
