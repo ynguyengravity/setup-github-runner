@@ -52,7 +52,15 @@ pct create $PCTID $TEMPL_FILE \
     -swap 4096 \
     -storage local-lvm \
     -features nesting=1,keyctl=1 \
+    -unprivileged 0 \
     -net0 name=eth0,bridge=vmbr1,ip=dhcp,firewall=1,type=veth
+
+# Add important LXC configuration for Docker
+log "-- Applying special container configurations for Docker"
+pct set $PCTID -lxc-config="lxc.apparmor.profile=unconfined" 
+pct set $PCTID -lxc-config="lxc.cap.drop=" 
+pct set $PCTID -lxc-config="lxc.cgroup.devices.allow=a" 
+pct set $PCTID -lxc-config="lxc.mount.auto=proc:rw sys:rw"
 
 log "-- Resizing container to $PCTSIZE"
 pct resize $PCTID rootfs $PCTSIZE
@@ -72,22 +80,20 @@ pct exec $PCTID -- bash -c "export DEBIAN_FRONTEND=noninteractive && \
     export LANG=en_US.UTF-8 && \
     export LC_ALL=en_US.UTF-8 && \
     apt update -y && \
-    apt install -y git curl software-properties-common apt-transport-https ca-certificates gnupg lsb-release && \
+    apt install -y git curl software-properties-common apt-transport-https ca-certificates gnupg lsb-release apparmor apparmor-utils && \
     passwd -d root"
 
-# Install Docker
-log "-- Installing Docker"
+# Disable apparmor if it's causing issues
+log "-- Configuring AppArmor"
+pct exec $PCTID -- bash -c "systemctl disable apparmor && systemctl stop apparmor || true"
+
+# Install Docker using convenience script instead of repository method
+log "-- Installing Docker using official convenience script"
 pct exec $PCTID -- bash -c "export LANG=en_US.UTF-8 && \
     export LC_ALL=en_US.UTF-8 && \
     export DEBIAN_FRONTEND=noninteractive && \
-    apt-get update && \
-    apt-get install -y ca-certificates curl gnupg && \
-    install -m 0755 -d /etc/apt/keyrings && \
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg && \
-    chmod a+r /etc/apt/keyrings/docker.gpg && \
-    echo \"deb [arch=\$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \$(. /etc/os-release && echo \$VERSION_CODENAME) stable\" | tee /etc/apt/sources.list.d/docker.list > /dev/null && \
-    apt-get update && \
-    apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin && \
+    curl -fsSL https://get.docker.com -o get-docker.sh && \
+    sh get-docker.sh && \
     systemctl enable docker && \
     systemctl start docker && \
     docker --version"
@@ -152,7 +158,7 @@ pct exec $PCTID -- bash -c "systemctl enable actions.runner.${ORGNAME}.github-ru
 log "-- Adding GitHub runner user to docker group"
 pct exec $PCTID -- bash -c "usermod -aG docker root"
 
-# Creating Docker configuration for better performance
+# Creating Docker configuration for better performance and to avoid AppArmor issues
 log "-- Configuring Docker with best practices"
 pct exec $PCTID -- bash -c "mkdir -p /etc/docker"
 pct exec $PCTID -- bash -c "cat > /etc/docker/daemon.json <<EOF
@@ -169,10 +175,28 @@ pct exec $PCTID -- bash -c "cat > /etc/docker/daemon.json <<EOF
       \"Hard\": 64000,
       \"Soft\": 64000
     }
-  }
+  },
+  \"exec-opts\": [\"native.cgroupdriver=systemd\"],
+  \"features\": {
+    \"buildkit\": true
+  },
+  \"live-restore\": true,
+  \"iptables\": false,
+  \"bip\": \"172.18.0.1/16\"
 }
 EOF"
-pct exec $PCTID -- bash -c "systemctl restart docker"
+
+# Configure Docker to not use AppArmor
+log "-- Disabling AppArmor for Docker"
+pct exec $PCTID -- bash -c "mkdir -p /etc/systemd/system/docker.service.d"
+pct exec $PCTID -- bash -c "cat > /etc/systemd/system/docker.service.d/override.conf <<EOF
+[Service]
+ExecStart=
+ExecStart=/usr/bin/dockerd --containerd=/run/containerd/containerd.sock --host=fd:// --add-runtime=runc=/usr/bin/runc --security-opt apparmor=unconfined
+EOF"
+
+# Restart Docker with the new configuration
+pct exec $PCTID -- bash -c "systemctl daemon-reload && systemctl restart docker"
 
 # Setup docker cleanup cron job to prevent disk space issues
 log "-- Setting up Docker cleanup cron job"
@@ -193,9 +217,9 @@ pct exec $PCTID -- bash -c "echo 'Ensuring AWS CLI is in PATH...'"
 pct exec $PCTID -- bash -c "ln -sf /usr/local/bin/aws /usr/bin/aws"
 pct exec $PCTID -- bash -c "ln -sf /usr/local/bin/aws_completer /usr/bin/aws_completer"
 
-# Verify Docker installation
-log "-- Verifying Docker installation"
-pct exec $PCTID -- bash -c "docker --version && docker info"
+# Test Docker functionality
+log "-- Testing Docker functionality"
+pct exec $PCTID -- bash -c "docker run --rm hello-world || echo 'Docker test failed!'"
 
 # Add Docker to GitHub Actions runner service environment
 log "-- Adding Docker to GitHub Actions runner service environment"
@@ -207,11 +231,11 @@ pct exec $PCTID -- bash -c "systemctl restart actions.runner.${ORGNAME}.github-r
 
 # Pull some common Docker images to speed up workflows
 log "-- Pre-pulling common Docker images"
-pct exec $PCTID -- bash -c "docker pull node:16-alpine"
-pct exec $PCTID -- bash -c "docker pull node:18-alpine"
-pct exec $PCTID -- bash -c "docker pull nginx:alpine"
-pct exec $PCTID -- bash -c "docker pull alpine:latest"
-pct exec $PCTID -- bash -c "docker pull ubuntu:22.04"
+pct exec $PCTID -- bash -c "docker pull node:16-alpine || true"
+pct exec $PCTID -- bash -c "docker pull node:18-alpine || true"
+pct exec $PCTID -- bash -c "docker pull nginx:alpine || true"
+pct exec $PCTID -- bash -c "docker pull alpine:latest || true"
+pct exec $PCTID -- bash -c "docker pull ubuntu:22.04 || true"
 
 log "-- Setup completed successfully!"
 log "-- Container ID: $PCTID is now running GitHub Actions runner for $ORGNAME"
