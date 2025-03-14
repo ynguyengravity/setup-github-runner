@@ -4,7 +4,7 @@ set -e
 
 GITHUB_RUNNER_URL="https://github.com/actions/runner/releases/download/v2.322.0/actions-runner-linux-x64-2.322.0.tar.gz"
 TEMPL_URL="http://download.proxmox.com/images/system/ubuntu-24.04-standard_24.04-1_amd64.tar.zst"
-PCTSIZE="20G"
+PCTSIZE="50G"
 RUNNER_LABELS="vn-gaqc-docker,test-setup"
 # RUNNER_LABELS="test-playwright"
 RUNNER_GROUP="VN-Team"
