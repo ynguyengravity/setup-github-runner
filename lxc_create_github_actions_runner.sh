@@ -3,7 +3,7 @@
 set -e
 
 GITHUB_RUNNER_URL="https://github.com/actions/runner/releases/download/v2.322.0/actions-runner-linux-x64-2.322.0.tar.gz"
-TEMPL_URL="http://download.proxmox.com/images/system/ubuntu-22.04-standard_22.04-1_amd64.tar.zst"
+TEMPL_URL="http://download.proxmox.com/images/system/ubuntu-24.04-standard_24.04-1_amd64.tar.zst"
 PCTSIZE="20G"
 RUNNER_LABELS="vn-gaqc-docker,test-setup"
 # RUNNER_LABELS="test-playwright"
@@ -25,7 +25,7 @@ log() {
   echo -e "\033[33m$text\033[0m"
 }
 
-log "-- Using Ubuntu 22.04 LTS (Jammy Jellyfish) template - supported until 2027"
+log "-- Using Ubuntu 24.04 LTS (Noble Numbat) template - supported until 2029"
 log "-- Setting up runner for Organization: ${ORGNAME}"
 log "-- Using runner labels: ${RUNNER_LABELS}"
 log "-- Using runner group: ${RUNNER_GROUP}"
