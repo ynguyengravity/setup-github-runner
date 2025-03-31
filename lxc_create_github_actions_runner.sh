@@ -50,7 +50,7 @@ pct create $PCTID $TEMPL_FILE \
     -cores 10 \
     -memory 32768 \
     -swap 32768 \
-    -storage local-lvm \
+    -storage local-lvm2 \
     -features nesting=1,keyctl=1 \
     -net0 name=eth0,bridge=vmbr1,ip=dhcp,firewall=1,type=veth
 
