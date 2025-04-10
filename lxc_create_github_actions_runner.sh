@@ -52,6 +52,7 @@ pct create $PCTID $TEMPL_FILE \
     -swap 32768 \
     -storage local-lvm2 \
     -features nesting=1,keyctl=1 \
+    -unprivileged 0 \
     -net0 name=eth0,bridge=vmbr1,ip=dhcp,firewall=1,type=veth
 
 log "-- Resizing container to $PCTSIZE"
@@ -66,9 +67,21 @@ echo "lxc.apparmor.profile: unconfined" >> $CONTAINER_CONFIG
 echo "lxc.cgroup.devices.allow: a" >> $CONTAINER_CONFIG
 echo "lxc.cap.drop: " >> $CONTAINER_CONFIG
 
+# Enable TUN/TAP for OpenVPN
+log "-- Enabling TUN/TAP devices for OpenVPN"
+echo "# TUN/TAP device support" >> $CONTAINER_CONFIG
+echo "lxc.cgroup2.devices.allow: c 10:200 rwm" >> $CONTAINER_CONFIG
+echo "lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file" >> $CONTAINER_CONFIG
+
 log "-- Starting container"
 pct start $PCTID
 sleep 10
+
+# Create TUN device if it doesn't exist
+log "-- Setting up TUN device"
+pct exec $PCTID -- bash -c "mkdir -p /dev/net && \
+    mknod /dev/net/tun c 10 200 || true && \
+    chmod 600 /dev/net/tun"
 
 log "-- Configure locale settings"
 pct exec $PCTID -- bash -c "apt update -y && \
@@ -83,6 +96,20 @@ pct exec $PCTID -- bash -c "export DEBIAN_FRONTEND=noninteractive && \
     apt update -y && \
     apt install -y git curl software-properties-common apt-transport-https ca-certificates gnupg lsb-release && \
     passwd -d root"
+
+# Install OpenVPN
+log "-- Installing OpenVPN"
+pct exec $PCTID -- bash -c "export DEBIAN_FRONTEND=noninteractive && \
+    export LANG=en_US.UTF-8 && \
+    export LC_ALL=en_US.UTF-8 && \
+    apt update -y && \
+    apt install -y openvpn openvpn-systemd-resolved resolvconf net-tools iptables iproute2 && \
+    systemctl enable openvpn"
+
+# Verify TUN device is working
+log "-- Verifying TUN device"
+pct exec $PCTID -- bash -c "ls -la /dev/net/tun && \
+    cat /dev/net/tun || echo 'TUN device exists but cannot be read (this is normal)'"
 
 #install docker
 log "-- Installing docker"
