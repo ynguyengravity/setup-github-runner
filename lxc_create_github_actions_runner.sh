@@ -71,6 +71,10 @@ echo "lxc.apparmor.profile: unconfined" >> $CONTAINER_CONFIG
 echo "lxc.cgroup.devices.allow: a" >> $CONTAINER_CONFIG
 echo "lxc.cap.drop: " >> $CONTAINER_CONFIG
 
+# Set persistent DNS for the container
+log "-- Setting persistent DNS in LXC config"
+echo "lxc.net.0.ipv4.dns: 10.188.50.6 8.8.8.8" >> $CONTAINER_CONFIG
+
 # Enable TUN/TAP for OpenVPN
 log "-- Enabling TUN/TAP devices for OpenVPN"
 echo "# TUN/TAP device support" >> $CONTAINER_CONFIG
@@ -80,13 +84,6 @@ echo "lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file" >> $CONTA
 log "-- Starting container"
 pct start $PCTID
 sleep 10
-
-# Set custom DNS resolvers inside the container
-log "-- Setting custom DNS resolvers in /etc/resolv.conf"
-pct exec $PCTID -- bash -c "cat > /etc/resolv.conf <<EOF
-nameserver 10.188.50.6
-nameserver 8.8.8.8
-EOF"
 
 # Create TUN device if it doesn't exist
 log "-- Setting up TUN device"
