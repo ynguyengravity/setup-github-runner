@@ -81,6 +81,13 @@ log "-- Starting container"
 pct start $PCTID
 sleep 10
 
+# Set custom DNS resolvers inside the container
+log "-- Setting custom DNS resolvers in /etc/resolv.conf"
+pct exec $PCTID -- bash -c "cat > /etc/resolv.conf <<EOF
+nameserver 10.188.50.6
+nameserver 8.8.8.8
+EOF"
+
 # Create TUN device if it doesn't exist
 log "-- Setting up TUN device"
 pct exec $PCTID -- bash -c "mkdir -p /dev/net && \
