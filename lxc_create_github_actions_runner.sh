@@ -39,8 +39,12 @@ TEMPL_FILE=$(basename $TEMPL_URL)
 GITHUB_RUNNER_FILE=$(basename $GITHUB_RUNNER_URL)
 PCTID=$(pvesh get /cluster/nextid)
 
-log "-- Downloading $TEMPL_FILE template..."
-curl -q -C - -o $TEMPL_FILE $TEMPL_URL
+if [ -f "$TEMPL_FILE" ]; then
+    log "-- Template $TEMPL_FILE already exists, skipping download."
+else
+    log "-- Downloading $TEMPL_FILE template..."
+    curl -q -C - -o $TEMPL_FILE $TEMPL_URL
+fi
 
 log "-- Creating LXC container with ID:$PCTID"
 pct create $PCTID $TEMPL_FILE \
