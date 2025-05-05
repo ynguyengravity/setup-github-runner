@@ -71,10 +71,6 @@ echo "lxc.apparmor.profile: unconfined" >> $CONTAINER_CONFIG
 echo "lxc.cgroup.devices.allow: a" >> $CONTAINER_CONFIG
 echo "lxc.cap.drop: " >> $CONTAINER_CONFIG
 
-# Set persistent DNS for the container
-log "-- Setting persistent DNS in LXC config"
-echo "lxc.net.0.ipv4.dns: 10.188.50.6 8.8.8.8" >> $CONTAINER_CONFIG
-
 # Enable TUN/TAP for OpenVPN
 log "-- Enabling TUN/TAP devices for OpenVPN"
 echo "# TUN/TAP device support" >> $CONTAINER_CONFIG
