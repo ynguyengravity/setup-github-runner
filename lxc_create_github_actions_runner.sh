@@ -9,7 +9,7 @@ RUNNER_LABELS="vn-gaqc-docker,test-setup"
 # RUNNER_LABELS="test-playwright"
 RUNNER_GROUP="VN-Team"
 ORGNAME="Gravity-Global"
-CURRENT_DATE=$(date +%Y%m%d)x
+CURRENT_DATE=$(date +%Y%m%d)
 
 if [ -z "$GITHUB_TOKEN" ]; then
     read -p "Enter github token: " GITHUB_TOKEN
