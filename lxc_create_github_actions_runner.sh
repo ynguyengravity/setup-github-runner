@@ -223,4 +223,4 @@ log "-- Runner name: github-runner-${PCTID}-${CURRENT_DATE}"
 log "-- Runner labels: ${RUNNER_LABELS}"
 log "-- Runner group: ${RUNNER_GROUP}"
 
-rm $TEMPL_FILE
+# rm $TEMPL_FILE
