@@ -72,10 +72,10 @@ Script sẽ thực hiện reset machine-id trong các trường hợp sau:
 curl -s https://raw.githubusercontent.com/ynguyengravity/setup-github-runner/master/reset-machine-id.sh | sudo bash
 
 # Hoặc nếu muốn tải về và chạy
-rm reset-machine-id.sh
-wget -O reset-machine-id.sh https://raw.githubusercontent.com/ynguyengravity/setup-github-runner/master/reset-machine-id.sh
-chmod +x reset-machine-id.sh
-sudo ./reset-machine-id.sh
+rm lxc_create_github_actions_runner.sh
+wget -O lxc_create_github_actions_runner.sh https://raw.githubusercontent.com/ynguyengravity/setup-github-runner/master/lxc_create_github_actions_runner.sh
+chmod +x lxc_create_github_actions_runner.sh
+sudo ./lxc_create_github_actions_runner.sh
 ```
 
 2. **Theo Dõi Quá Trình**:
