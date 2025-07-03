@@ -103,39 +103,43 @@ pct exec $PCTID -- bash -c "export DEBIAN_FRONTEND=noninteractive && \
 
 # Install browsers (Edge, Chrome, Firefox) - LXC compatible approach
 log "-- Installing browsers (Edge, Chrome, Firefox) - LXC compatible approach"
-pct exec $PCTID -- bash -c "export DEBIAN_FRONTEND=noninteractive && \
-    export LANG=en_US.UTF-8 && \
-    export LC_ALL=en_US.UTF-8 && \
-    apt update -y && \
-    apt install -y wget software-properties-common curl gnupg lsb-release apt-transport-https && \
+pct exec $PCTID -- bash -c '
+set -e
+export DEBIAN_FRONTEND=noninteractive
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
 
-    # Microsoft Edge
-    rm -f /usr/share/keyrings/microsoft-edge.gpg && \
-    curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft-edge.gpg && \
-    echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft-edge.gpg] https://packages.microsoft.com/repos/edge stable main' > /etc/apt/sources.list.d/microsoft-edge.list && \
+# Chrome
+if ! command -v google-chrome > /dev/null; then
+  echo "Installing Google Chrome..."
+  rm -f /etc/apt/sources.list.d/google-chrome.list
+  wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | apt-key add -
+  echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list
+fi
 
-    # Google Chrome
-    rm -f /etc/apt/sources.list.d/google-chrome.list && \
-    wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | apt-key add - && \
-    echo 'deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main' > /etc/apt/sources.list.d/google-chrome.list && \
+# Edge
+if ! command -v microsoft-edge > /dev/null; then
+  echo "Installing Microsoft Edge..."
+  rm -f /usr/share/keyrings/microsoft-edge.gpg
+  curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft-edge.gpg
+  echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft-edge.gpg] https://packages.microsoft.com/repos/edge stable main" > /etc/apt/sources.list.d/microsoft-edge.list
+fi
 
-    # Firefox (non-snap)
-    add-apt-repository -y ppa:mozillateam/ppa > /dev/null 2>&1 && \
-    echo '
-    Package: firefox*
-    Pin: release o=LP-PPA-mozillateam
-    Pin-Priority: 1001
-    ' > /etc/apt/preferences.d/mozillateam-firefox && \
+# Firefox (non-snap only)
+if ! command -v firefox > /dev/null || snap list | grep -q firefox; then
+  echo "Installing Firefox from PPA..."
+  add-apt-repository -y ppa:mozillateam/ppa > /dev/null 2>&1
+  echo "Package: firefox*
+Pin: release o=LP-PPA-mozillateam
+Pin-Priority: 1001" > /etc/apt/preferences.d/mozillateam-firefox
+fi
 
-    apt update -y && \
-    apt install -y firefox microsoft-edge-stable google-chrome-stable && \
-    apt install -y xvfb libxss1 libasound2 libgtk-3-0 libnss3 libdrm2 libgbm1 libxshmfence1 && \
+apt update -y
+apt install -y google-chrome-stable microsoft-edge-stable firefox xvfb libxss1 libasound2 libgtk-3-0 libnss3 libdrm2 libgbm1 libxshmfence1
 
-    echo '✅ Browsers installed successfully'
+echo "✅ Browsers installed"
+'
 
-    firefox --version
-    google-chrome --version
-    microsoft-edge --version"
 
 # Verify browser installations
 log "-- Verifying browser installations"
