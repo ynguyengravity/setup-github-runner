@@ -107,26 +107,32 @@ pct exec $PCTID -- bash -c "export DEBIAN_FRONTEND=noninteractive && \
     export LANG=en_US.UTF-8 && \
     export LC_ALL=en_US.UTF-8 && \
     apt update -y && \
-    apt install -y wget software-properties-common && \
-    # Install Microsoft Edge \
+    apt install -y wget software-properties-common curl gnupg lsb-release apt-transport-https && \
+
+    # Microsoft Edge
+    rm -f /usr/share/keyrings/microsoft-edge.gpg && \
     curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft-edge.gpg && \
     echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft-edge.gpg] https://packages.microsoft.com/repos/edge stable main' > /etc/apt/sources.list.d/microsoft-edge.list && \
-    # Install Google Chrome \
+
+    # Google Chrome
+    rm -f /etc/apt/sources.list.d/google-chrome.list && \
     wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | apt-key add - && \
     echo 'deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main' > /etc/apt/sources.list.d/google-chrome.list && \
-    # Install Firefox ESR (snap-free version) or fallback to manual download \
+
+    # Firefox (non-snap)
+    add-apt-repository -y ppa:mozillateam/ppa > /dev/null 2>&1 && \
+    echo '
+    Package: firefox*
+    Pin: release o=LP-PPA-mozillateam
+    Pin-Priority: 1001
+    ' > /etc/apt/preferences.d/mozillateam-firefox && \
+
     apt update -y && \
-    (apt install -y firefox-esr && ln -sf /usr/bin/firefox-esr /usr/bin/firefox) || \
-    (echo 'Firefox ESR not available, downloading Firefox manually...' && \
-    wget -O firefox.tar.bz2 'https://download.mozilla.org/?product=firefox-latest&os=linux64&lang=en-US' && \
-    tar -xjf firefox.tar.bz2 -C /opt/ && \
-    ln -sf /opt/firefox/firefox /usr/bin/firefox && \
-    rm firefox.tar.bz2) && \
-    # Install Edge and Chrome \
-    apt install -y microsoft-edge-stable google-chrome-stable && \
-    # Install additional dependencies for browser automation \
+    apt install -y firefox microsoft-edge-stable google-chrome-stable && \
     apt install -y xvfb libxss1 libasound2 libgtk-3-0 libnss3 libdrm2 libgbm1 libxshmfence1 && \
-    echo 'Browsers installed successfully'
+
+    echo '✅ Browsers installed successfully'
+
     firefox --version
     google-chrome --version
     microsoft-edge --version"
