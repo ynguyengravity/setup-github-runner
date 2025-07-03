@@ -69,18 +69,13 @@ CONTAINER_CONFIG="/etc/pve/lxc/${PCTID}.conf"
 echo "# Docker support configuration" >> $CONTAINER_CONFIG
 echo "lxc.apparmor.profile: unconfined" >> $CONTAINER_CONFIG
 echo "lxc.cgroup.devices.allow: a" >> $CONTAINER_CONFIG
+echo "lxc.cap.drop: " >> $CONTAINER_CONFIG
 
 # Enable TUN/TAP for OpenVPN
 log "-- Enabling TUN/TAP devices for OpenVPN"
 echo "# TUN/TAP device support" >> $CONTAINER_CONFIG
 echo "lxc.cgroup2.devices.allow: c 10:200 rwm" >> $CONTAINER_CONFIG
 echo "lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file" >> $CONTAINER_CONFIG
-
-# Enable additional capabilities for better compatibility
-log "-- Enabling additional capabilities for LXC compatibility"
-echo "# Additional capabilities for LXC compatibility" >> $CONTAINER_CONFIG
-echo "lxc.cap.drop: " >> $CONTAINER_CONFIG
-echo "lxc.cap.keep: sys_admin sys_chroot sys_resource" >> $CONTAINER_CONFIG
 
 log "-- Starting container"
 pct start $PCTID
@@ -131,7 +126,10 @@ pct exec $PCTID -- bash -c "export DEBIAN_FRONTEND=noninteractive && \
     apt install -y microsoft-edge-stable google-chrome-stable && \
     # Install additional dependencies for browser automation \
     apt install -y xvfb libxss1 libasound2 libgtk-3-0 libnss3 libdrm2 libgbm1 libxshmfence1 && \
-    echo 'Browsers installed successfully'"
+    echo 'Browsers installed successfully'
+    firefox --version
+    google-chrome --version
+    microsoft-edge --version"
 
 # Verify browser installations
 log "-- Verifying browser installations"
