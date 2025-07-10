@@ -172,8 +172,11 @@ echo "✅ Node.js installed"
 
 # Install Playwright with dependencies
 log "-- Installing Playwright with dependencies"
+# Đổi CDN tải browser nếu cần (ví dụ dùng AzureEdge)
+export PLAYWRIGHT_DOWNLOAD_HOST="https://playwright.azureedge.net"
 pct exec $PCTID -- bash -c "export LANG=en_US.UTF-8 && \
     export LC_ALL=en_US.UTF-8 && \
+    export PLAYWRIGHT_DOWNLOAD_HOST=\"https://playwright.azureedge.net\" && \
     yes | npx playwright@latest install --with-deps"
 
 # Verify Playwright installation
