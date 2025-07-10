@@ -151,6 +151,35 @@ pct exec $PCTID -- bash -c "echo 'Checking Edge...' && microsoft-edge --version 
 log "-- Cleaning up duplicate repository entries"
 pct exec $PCTID -- bash -c "rm -f /etc/apt/sources.list.d/google.list || true"
 
+# Install Node.js
+log "-- Installing Node.js"
+pct exec $PCTID -- bash -c '
+set -e
+export DEBIAN_FRONTEND=noninteractive
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+
+# Install Node.js using NodeSource repository
+curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+apt-get install -y nodejs
+
+# Verify Node.js installation
+node --version
+npm --version
+
+echo "✅ Node.js installed"
+'
+
+# Install Playwright with dependencies
+log "-- Installing Playwright with dependencies"
+pct exec $PCTID -- bash -c "export LANG=en_US.UTF-8 && \
+    export LC_ALL=en_US.UTF-8 && \
+    yes | npx playwright@latest install --with-deps"
+
+# Verify Playwright installation
+log "-- Verifying Playwright installation"
+pct exec $PCTID -- bash -c "npx playwright --version"
+
 # Install OpenVPN
 log "-- Installing OpenVPN"
 pct exec $PCTID -- bash -c "export DEBIAN_FRONTEND=noninteractive && \
