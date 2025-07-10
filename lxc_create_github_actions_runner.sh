@@ -181,7 +181,7 @@ pct exec $PCTID -- bash -c "export LANG=en_US.UTF-8 && \
 
 # Verify Playwright installation
 log "-- Verifying Playwright installation"
-pct exec $PCTID -- bash -c "npx playwright --version"
+pct exec $PCTID -- bash -c "yes | npx playwright --version"
 
 # Install OpenVPN
 log "-- Installing OpenVPN"
