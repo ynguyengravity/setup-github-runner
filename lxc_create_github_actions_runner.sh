@@ -299,10 +299,15 @@ pct exec $PCTID -- bash -c "echo 'Environment=PATH=/usr/local/sbin:/usr/local/bi
 pct exec $PCTID -- bash -c "systemctl daemon-reload"
 pct exec $PCTID -- bash -c "systemctl restart actions.runner.${ORGNAME}.github-runner-${PCTID}-${CURRENT_DATE}.service || true"
 
+# Enable auto-start for the container
+log "-- Enabling auto-start for container $PCTID"
+pct set $PCTID --onboot 1
+
 log "-- Setup completed successfully!"
 log "-- Container ID: $PCTID is now running GitHub Actions runner for $ORGNAME"
 log "-- Runner name: github-runner-${PCTID}-${CURRENT_DATE}"
 log "-- Runner labels: ${RUNNER_LABELS}"
 log "-- Runner group: ${RUNNER_GROUP}"
+log "-- Auto-start enabled: Container will start automatically when Proxmox boots"
 
 # rm $TEMPL_FILE
