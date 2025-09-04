@@ -51,7 +51,7 @@ pct create $PCTID $TEMPL_FILE \
     -arch amd64 \
     -ostype ubuntu \
     -hostname github-runner-${PCTID}-${CURRENT_DATE} \
-    -cores 10 \
+    -cores 5 \
     -memory 32768 \
     -swap 32768 \
     -storage local-lvm2 \
