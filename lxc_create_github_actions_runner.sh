@@ -42,7 +42,8 @@ GITHUB_RUNNER_FILE=$(basename $GITHUB_RUNNER_URL)
 # Function to check if container ID exists
 check_container_exists() {
     local id=$1
-    pvesh get /cluster/resources --type lxc | grep -q "\"vmid\":$id" 2>/dev/null
+    # Check if container exists by trying to get its status
+    pvesh get /nodes/$(hostname)/lxc/$id/status/current 2>/dev/null | grep -q "\"vmid\":$id" 2>/dev/null
 }
 
 # Find next available container ID starting from 300
@@ -50,6 +51,7 @@ find_next_available_id() {
     local current_id=$START_ID
     
     while check_container_exists $current_id; do
+        log "-- Container ID $current_id already exists, trying next..."
         current_id=$((current_id + 1))
         # Safety check to prevent infinite loop
         if [ $current_id -gt 999 ]; then
