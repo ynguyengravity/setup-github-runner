@@ -42,28 +42,10 @@ GITHUB_RUNNER_FILE=$(basename $GITHUB_RUNNER_URL)
 # Function to check if container ID exists
 check_container_exists() {
     local id=$1
-    log "-- DEBUG: Checking if container ID $id exists..."
-    
-    # Try different methods to check container existence
-    local result1=$(pvesh get /nodes/$(hostname)/lxc/$id/config 2>&1)
-    local exit_code1=$?
-    
-    log "-- DEBUG: Method 1 (config) - Exit code: $exit_code1"
-    log "-- DEBUG: Method 1 output: $result1"
-    
-    # Alternative method - check if container directory exists
-    local result2=$(ls /etc/pve/lxc/${id}.conf 2>&1)
-    local exit_code2=$?
-    
-    log "-- DEBUG: Method 2 (file check) - Exit code: $exit_code2"
-    log "-- DEBUG: Method 2 output: $result2"
-    
-    # Use file existence as primary method
+    # Use file existence as primary method (most reliable)
     if [ -f "/etc/pve/lxc/${id}.conf" ]; then
-        log "-- DEBUG: Container $id EXISTS (found config file)"
         return 0
     else
-        log "-- DEBUG: Container $id does NOT exist (no config file)"
         return 1
     fi
 }
