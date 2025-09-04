@@ -10,7 +10,6 @@ RUNNER_LABELS="vn-gaqc-docker,test-setup"
 RUNNER_GROUP="VN-Team"
 ORGNAME="Gravity-Global"
 CURRENT_DATE=$(date +%Y%m%d)X
-START_ID=300
 
 if [ -z "$GITHUB_TOKEN" ]; then
     read -p "Enter github token: " GITHUB_TOKEN
@@ -38,37 +37,7 @@ log "-- Date: ${CURRENT_DATE}"
 
 TEMPL_FILE=$(basename $TEMPL_URL)
 GITHUB_RUNNER_FILE=$(basename $GITHUB_RUNNER_URL)
-
-# Function to check if container ID exists
-check_container_exists() {
-    local id=$1
-    # Use file existence as primary method (most reliable)
-    if [ -f "/etc/pve/lxc/${id}.conf" ]; then
-        return 0
-    else
-        return 1
-    fi
-}
-
-# Find next available container ID starting from 300
-find_next_available_id() {
-    local current_id=$START_ID
-    
-    while check_container_exists $current_id; do
-        log "-- Container ID $current_id already exists, trying next..."
-        current_id=$((current_id + 1))
-        # Safety check to prevent infinite loop
-        if [ $current_id -gt 999 ]; then
-            log "ERROR: No available container ID found in range 300-999"
-            exit 1
-        fi
-    done
-    
-    echo $current_id
-}
-
-PCTID=$(find_next_available_id)
-log "-- Found available container ID: $PCTID"
+PCTID=$(pvesh get /cluster/nextid)
 
 if [ -f "$TEMPL_FILE" ]; then
     log "-- Template $TEMPL_FILE already exists, skipping download."
@@ -169,96 +138,6 @@ apt update -y
 apt install -y google-chrome-stable microsoft-edge-stable firefox xvfb libxss1 libasound2 libgtk-3-0 libnss3 libdrm2 libgbm1 libxshmfence1
 
 echo "✅ Browsers installed"
-'
-
-# Setup automatic browser updates
-log "-- Setting up automatic browser updates"
-pct exec $PCTID -- bash -c '
-set -e
-export DEBIAN_FRONTEND=noninteractive
-export LANG=en_US.UTF-8
-export LC_ALL=en_US.UTF-8
-
-# Create browser update script
-cat > /usr/local/bin/update-browsers.sh << "EOF"
-#!/bin/bash
-set -e
-
-echo "$(date): Starting browser updates..."
-
-# Update package lists
-apt update -y
-
-# Update Chrome
-if command -v google-chrome > /dev/null; then
-    echo "Updating Google Chrome..."
-    apt install -y --only-upgrade google-chrome-stable || echo "Chrome update failed"
-fi
-
-# Update Edge
-if command -v microsoft-edge > /dev/null; then
-    echo "Updating Microsoft Edge..."
-    apt install -y --only-upgrade microsoft-edge-stable || echo "Edge update failed"
-fi
-
-# Update Firefox
-if command -v firefox > /dev/null; then
-    echo "Updating Firefox..."
-    apt install -y --only-upgrade firefox || echo "Firefox update failed"
-fi
-
-echo "$(date): Browser updates completed"
-EOF
-
-# Make the script executable
-chmod +x /usr/local/bin/update-browsers.sh
-
-# Create systemd service for automatic browser updates
-cat > /etc/systemd/system/browser-updater.service << EOF
-[Unit]
-Description=Automatic Browser Updates
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/update-browsers.sh
-User=root
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-# Create systemd timer for daily updates
-cat > /etc/systemd/system/browser-updater.timer << EOF
-[Unit]
-Description=Run browser updates daily
-Requires=browser-updater.service
-
-[Timer]
-OnCalendar=daily
-Persistent=true
-RandomizedDelaySec=3600
-
-[Install]
-WantedBy=timers.target
-EOF
-
-# Enable and start the timer
-systemctl daemon-reload
-systemctl enable browser-updater.timer
-systemctl start browser-updater.timer
-
-# Also run initial update
-echo "Running initial browser update..."
-/usr/local/bin/update-browsers.sh
-
-echo "✅ Automatic browser updates configured"
-echo "   - Updates will run daily at random time"
-echo "   - Check status with: systemctl status browser-updater.timer"
-echo "   - Manual update: /usr/local/bin/update-browsers.sh"
 '
 
 
