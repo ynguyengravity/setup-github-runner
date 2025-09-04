@@ -42,8 +42,9 @@ GITHUB_RUNNER_FILE=$(basename $GITHUB_RUNNER_URL)
 # Function to check if container ID exists
 check_container_exists() {
     local id=$1
-    # Check if container exists by trying to get its status
-    pvesh get /nodes/$(hostname)/lxc/$id/status/current 2>/dev/null | grep -q "\"vmid\":$id" 2>/dev/null
+    # Check if container exists by trying to get its config
+    pvesh get /nodes/$(hostname)/lxc/$id/config 2>/dev/null >/dev/null
+    return $?
 }
 
 # Find next available container ID starting from 300
