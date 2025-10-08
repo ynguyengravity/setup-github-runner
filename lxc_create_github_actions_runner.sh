@@ -126,25 +126,16 @@ if ! command -v microsoft-edge > /dev/null; then
 fi
 
 # Firefox (non-snap only)
-apt install -y wget bzip2 xz-utils \
-  libasound2 libx11-xcb1 libdbus-glib-1-2 libxt6 libxrender1 \
-  libxcomposite1 libxdamage1 libxrandr2 libxi6 libglib2.0-0 \
-  libgtk-3-0 libnss3 libxss1 libxshmfence1 libdrm2 libgbm1
-
-if [ ! -d /opt/firefox/firefox ]; then
-  mkdir -p /opt/firefox
-  cd /opt/firefox
-  wget -O firefox.tar.bz2 "https://download.mozilla.org/?product=firefox-latest&os=linux64&lang=en-US"
-  tar -xf firefox.tar.bz2
-  ln -sf /opt/firefox/firefox/firefox /usr/local/bin/firefox
-  rm -f firefox.tar.bz2
+if ! command -v firefox > /dev/null || snap list | grep -q firefox; then
+  echo "Installing Firefox from PPA..."
+  add-apt-repository -y ppa:mozillateam/ppa > /dev/null 2>&1
+  echo "Package: firefox*
+Pin: release o=LP-PPA-mozillateam
+Pin-Priority: 1001" > /etc/apt/preferences.d/mozillateam-firefox
 fi
 
-echo "✅ Installed:"
-firefox --version
-
 apt update -y
-apt install -y google-chrome-stable microsoft-edge-stable xvfb libxss1 libasound2 libgtk-3-0 libnss3 libdrm2 libgbm1 libxshmfence1
+apt install -y google-chrome-stable microsoft-edge-stable firefox xvfb libxss1 libasound2 libgtk-3-0 libnss3 libdrm2 libgbm1 libxshmfence1
 
 echo "✅ Browsers installed"
 '
