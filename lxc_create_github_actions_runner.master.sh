@@ -170,15 +170,6 @@ npm --version
 echo "✅ Node.js installed"
 '
 
-# Install Playwright with dependencies
-log "-- Installing Playwright with dependencies"
-# Đổi CDN tải browser nếu cần (ví dụ dùng AzureEdge)
-export PLAYWRIGHT_DOWNLOAD_HOST="https://playwright.azureedge.net"
-pct exec $PCTID -- bash -c "export LANG=en_US.UTF-8 && \
-    export LC_ALL=en_US.UTF-8 && \
-    export PLAYWRIGHT_DOWNLOAD_HOST=\"https://playwright.azureedge.net\" && \
-    yes | npx playwright@latest install --with-deps"
-
 # Verify Playwright installation
 log "-- Verifying Playwright installation"
 pct exec $PCTID -- bash -c "yes | npx playwright --version"
@@ -260,6 +251,16 @@ if [ -z "$RUNNER_TOKEN" ]; then
     log "Make sure your token has admin:org permission for organization runners."
     exit 1
 fi
+
+
+# Install Playwright with dependencies
+log "-- Installing Playwright with dependencies"
+# Đổi CDN tải browser nếu cần (ví dụ dùng AzureEdge)
+pct exec $PCTID -- bash -c "export LANG=en_US.UTF-8 && \
+    export LC_ALL=en_US.UTF-8 && \
+    export PLAYWRIGHT_DOWNLOAD_HOST=\"https://playwright.azureedge.net\" && \
+    yes | npx playwright@latest install --with-deps"
+
 
 # log "-- Installing runner"
 # pct exec $PCTID -- bash -c "export LANG=en_US.UTF-8 && \
