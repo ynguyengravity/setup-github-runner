@@ -232,6 +232,7 @@ pct exec $PCTID -- bash -c "export LANG=en_US.UTF-8 && \
     source /etc/environment && \
     aws --version"
 
+# =================================
 log "-- Getting runner installation token"
 log "-- Using API URL: $API_URL"
 RES=$(curl -q -L \
@@ -252,7 +253,7 @@ if [ -z "$RUNNER_TOKEN" ]; then
     exit 1
 fi
 
-
+# =================================
 # Install Playwright with dependencies
 log "-- Installing Playwright with dependencies"
 # Đổi CDN tải browser nếu cần (ví dụ dùng AzureEdge)
@@ -261,13 +262,29 @@ pct exec $PCTID -- bash -c "export LANG=en_US.UTF-8 && \
     export PLAYWRIGHT_DOWNLOAD_HOST=\"https://playwright.azureedge.net\" && \
     yes | npx playwright@latest install --with-deps"
 
-# Install upgrade
+# =================================
 log "-- Installing upgrade"
-# Đổi CDN tải browser nếu cần (ví dụ dùng AzureEdge)
-pct exec $PCTID -- bash -c "export LANG=en_US.UTF-8 && \
-    export LC_ALL=en_US.UTF-8 && \
-    yes | apt update && \
-    yes | apt upgrade"
+pct exec $PCTID -- bash -c "
+    set -e
+
+    export LANG=en_US.UTF-8
+    export LC_ALL=en_US.UTF-8
+
+    echo '==> Updating package list'
+    apt update
+
+    echo '==> Upgrading packages'
+    DEBIAN_FRONTEND=noninteractive apt upgrade -y
+
+    echo '==> Cleaning unused packages'
+    apt autoremove -y
+    apt autoclean -y
+
+    echo '==> Upgrade completed successfully'
+"
+# =================================
+log "-- Restarting container"
+pct restart $PCTID
 
 # log "-- Installing runner"
 # pct exec $PCTID -- bash -c "export LANG=en_US.UTF-8 && \
