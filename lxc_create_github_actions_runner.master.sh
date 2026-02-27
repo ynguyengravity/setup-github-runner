@@ -261,6 +261,13 @@ pct exec $PCTID -- bash -c "export LANG=en_US.UTF-8 && \
     export PLAYWRIGHT_DOWNLOAD_HOST=\"https://playwright.azureedge.net\" && \
     yes | npx playwright@latest install --with-deps"
 
+# Install upgrade
+log "-- Installing upgrade"
+# Đổi CDN tải browser nếu cần (ví dụ dùng AzureEdge)
+pct exec $PCTID -- bash -c "export LANG=en_US.UTF-8 && \
+    export LC_ALL=en_US.UTF-8 && \
+    yes | apt update && \
+    yes | apt upgrade"
 
 # log "-- Installing runner"
 # pct exec $PCTID -- bash -c "export LANG=en_US.UTF-8 && \
