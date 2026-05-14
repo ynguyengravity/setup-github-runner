@@ -46,11 +46,21 @@ else
     curl -q -C - -o $TEMPL_FILE $TEMPL_URL
 fi
 
-if [ -f "$GITHUB_RUNNER_FILE" ]; then
-    log "-- GitHub runner $GITHUB_RUNNER_FILE already exists, skipping download."
-else
+_download_runner() {
     log "-- Downloading GitHub runner $GITHUB_RUNNER_FILE..."
-    curl -C - -o $GITHUB_RUNNER_FILE -L $GITHUB_RUNNER_URL
+    curl -o $GITHUB_RUNNER_FILE -L $GITHUB_RUNNER_URL
+}
+
+if [ -f "$GITHUB_RUNNER_FILE" ]; then
+    if tar tzf $GITHUB_RUNNER_FILE > /dev/null 2>&1; then
+        log "-- GitHub runner $GITHUB_RUNNER_FILE already exists and is valid, skipping download."
+    else
+        log "-- GitHub runner file is corrupted, re-downloading..."
+        rm -f $GITHUB_RUNNER_FILE
+        _download_runner
+    fi
+else
+    _download_runner
 fi
 
 log "-- Creating LXC container with ID:$PCTID"

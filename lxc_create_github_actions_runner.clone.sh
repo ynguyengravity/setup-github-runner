@@ -107,15 +107,18 @@ fi
 log "-- Installing GitHub Actions runner"
 pct exec $NEW_PCTID -- bash -c "mkdir -p /root/actions-runner"
 
-if [ -f "$GITHUB_RUNNER_FILE" ]; then
-    log "-- Copying cached runner file from host: $GITHUB_RUNNER_FILE"
+if [ -f "$GITHUB_RUNNER_FILE" ] && tar tzf $GITHUB_RUNNER_FILE > /dev/null 2>&1; then
+    log "-- Cached runner file is valid, copying to container: $GITHUB_RUNNER_FILE"
     pct push $NEW_PCTID $GITHUB_RUNNER_FILE /root/actions-runner/$GITHUB_RUNNER_FILE
 else
-    log "-- Runner file not found on host, downloading inside container..."
-    pct exec $NEW_PCTID -- bash -c "export LANG=en_US.UTF-8 && \
-        export LC_ALL=en_US.UTF-8 && \
-        cd /root/actions-runner && \
-        curl -o $GITHUB_RUNNER_FILE -L $GITHUB_RUNNER_URL"
+    if [ -f "$GITHUB_RUNNER_FILE" ]; then
+        log "-- Cached runner file is corrupted, re-downloading..."
+        rm -f $GITHUB_RUNNER_FILE
+    else
+        log "-- Runner file not found on host, downloading..."
+    fi
+    curl -o $GITHUB_RUNNER_FILE -L $GITHUB_RUNNER_URL
+    pct push $NEW_PCTID $GITHUB_RUNNER_FILE /root/actions-runner/$GITHUB_RUNNER_FILE
 fi
 
 pct exec $NEW_PCTID -- bash -c "export LANG=en_US.UTF-8 && \
