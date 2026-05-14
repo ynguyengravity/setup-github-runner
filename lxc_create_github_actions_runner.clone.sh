@@ -4,7 +4,7 @@ set -e
 
 # Configuration variables
 SOURCE_CONTAINER_ID=100
-GITHUB_RUNNER_URL="https://github.com/actions/runner/releases/download/v2.322.0/actions-runner-linux-x64-2.322.0.tar.gz"
+GITHUB_RUNNER_URL="https://github.com/actions/runner/releases/download/v2.334.0/actions-runner-linux-x64-2.334.0.tar.gz"
 RUNNER_LABELS="vn-gaqc-docker,test-setup"
 # RUNNER_LABELS="test-playwright"
 RUNNER_GROUP="VN-Team"
