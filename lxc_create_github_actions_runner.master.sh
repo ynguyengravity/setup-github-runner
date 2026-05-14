@@ -46,6 +46,13 @@ else
     curl -q -C - -o $TEMPL_FILE $TEMPL_URL
 fi
 
+if [ -f "$GITHUB_RUNNER_FILE" ]; then
+    log "-- GitHub runner $GITHUB_RUNNER_FILE already exists, skipping download."
+else
+    log "-- Downloading GitHub runner $GITHUB_RUNNER_FILE..."
+    curl -C - -o $GITHUB_RUNNER_FILE -L $GITHUB_RUNNER_URL
+fi
+
 log "-- Creating LXC container with ID:$PCTID"
 pct create $PCTID $TEMPL_FILE \
     -arch amd64 \

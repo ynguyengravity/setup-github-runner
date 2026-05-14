@@ -105,10 +105,22 @@ fi
 
 # Install GitHub Actions runner
 log "-- Installing GitHub Actions runner"
+pct exec $NEW_PCTID -- bash -c "mkdir -p /root/actions-runner"
+
+if [ -f "$GITHUB_RUNNER_FILE" ]; then
+    log "-- Copying cached runner file from host: $GITHUB_RUNNER_FILE"
+    pct push $NEW_PCTID $GITHUB_RUNNER_FILE /root/actions-runner/$GITHUB_RUNNER_FILE
+else
+    log "-- Runner file not found on host, downloading inside container..."
+    pct exec $NEW_PCTID -- bash -c "export LANG=en_US.UTF-8 && \
+        export LC_ALL=en_US.UTF-8 && \
+        cd /root/actions-runner && \
+        curl -o $GITHUB_RUNNER_FILE -L $GITHUB_RUNNER_URL"
+fi
+
 pct exec $NEW_PCTID -- bash -c "export LANG=en_US.UTF-8 && \
     export LC_ALL=en_US.UTF-8 && \
-    mkdir -p actions-runner && cd actions-runner && \
-    curl -o $GITHUB_RUNNER_FILE -L $GITHUB_RUNNER_URL && \
+    cd /root/actions-runner && \
     tar xzf $GITHUB_RUNNER_FILE && \
     RUNNER_ALLOW_RUNASROOT=1 ./config.sh --unattended \
     --url $RUNNER_URL \
