@@ -44,7 +44,8 @@ FONT_PACKAGES=(
   fonts-liberation2
   fonts-dejavu-core
   fonts-dejavu-extra
-  ttf-ubuntu-font-family
+  fonts-ubuntu              # Ubuntu 22.04+ (ttf-ubuntu-font-family đã đổi tên)
+  ttf-ubuntu-font-family    # Ubuntu 20.04 fallback
   # Emoji
   fonts-noto-color-emoji
   # CJK: Chinese / Japanese / Korean
@@ -74,8 +75,6 @@ FONT_PACKAGES=(
   fontconfig
   fontconfig-config
 )
-
-PACKAGES_STR="${FONT_PACKAGES[*]}"
 
 # --- Check Proxmox ---
 if ! command -v pct &>/dev/null; then
