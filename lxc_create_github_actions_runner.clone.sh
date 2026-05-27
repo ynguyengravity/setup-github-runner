@@ -9,7 +9,7 @@ GITHUB_RUNNER_URL="${GITHUB_RUNNER_URL:-https://github.com/actions/runner/releas
 RUNNER_LABELS="${RUNNER_LABELS:-vn-gaqc-docker,test-setup}"
 RUNNER_GROUP="${RUNNER_GROUP:-VN-Team}"
 ORGNAME="${ORGNAME:-Gravity-Global}"
-CURRENT_DATE=$(date +%Y%m%d)
+CURRENT_DATE=$(date +%Y%m%d)-27
 
 # Get GitHub token
 # Nếu chạy unattended (từ service/cron): bắt buộc GITHUB_TOKEN phải có trong env
