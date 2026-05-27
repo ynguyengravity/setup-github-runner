@@ -1,0 +1,28 @@
+[Unit]
+Description=LXC GitHub Runner Disk Monitor
+Documentation=https://github.com/ynguyengravity/setup-github-runner
+After=network-online.target pve-cluster.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Đổi đường dẫn nếu bạn để script ở nơi khác
+ExecStart=/opt/lxc-monitor/lxc-disk-monitor.sh
+
+# Chạy với quyền root (cần thiết cho pct commands)
+User=root
+Group=root
+
+# Đặt thư mục làm việc
+WorkingDirectory=/opt/lxc-monitor
+
+# Timeout tối đa cho mỗi lần chạy (tạo container mất ~10-15 phút)
+TimeoutStartSec=1800
+
+# Ghi log vào systemd journal
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lxc-disk-monitor
+
+[Install]
+WantedBy=multi-user.target

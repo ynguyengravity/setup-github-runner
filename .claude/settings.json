@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(chmod +x /Users/y.nguyen/projects/setup-github-runner/lxc-disk-monitor.sh /Users/y.nguyen/projects/setup-github-runner/install-monitor.sh)",
+      "Bash(chmod +x /Users/y.nguyen/projects/setup-github-runner/lxc-monitor-ui.sh)",
+      "Bash(bash -n /Users/y.nguyen/projects/setup-github-runner/lxc-monitor-ui.sh)",
+      "Bash(bash -n /Users/y.nguyen/projects/setup-github-runner/lxc-disk-monitor.sh)",
+      "Bash(bash -n /Users/y.nguyen/projects/setup-github-runner/lxc_create_github_actions_runner.clone.sh)",
+      "Bash(chmod +x /Users/y.nguyen/projects/setup-github-runner/uninstall-monitor.sh)",
+      "Bash(bash -n /Users/y.nguyen/projects/setup-github-runner/uninstall-monitor.sh)",
+      "Bash(chmod +x /Users/y.nguyen/projects/setup-github-runner/monitor-menu.sh)",
+      "Bash(bash -n /Users/y.nguyen/projects/setup-github-runner/monitor-menu.sh)"
+    ]
+  }
+}

@@ -3,18 +3,27 @@
 set -e
 
 # Configuration variables
-SOURCE_CONTAINER_ID=100
-GITHUB_RUNNER_URL="https://github.com/actions/runner/releases/download/v2.334.0/actions-runner-linux-x64-2.334.0.tar.gz"
-RUNNER_LABELS="vn-gaqc-docker,test-setup"
-# RUNNER_LABELS="test-playwright"
-RUNNER_GROUP="VN-Team"
-ORGNAME="Gravity-Global"
+# Tất cả biến đọc từ env trước, fallback về giá trị mặc định
+SOURCE_CONTAINER_ID="${SOURCE_CONTAINER_ID:-100}"
+GITHUB_RUNNER_URL="${GITHUB_RUNNER_URL:-https://github.com/actions/runner/releases/download/v2.334.0/actions-runner-linux-x64-2.334.0.tar.gz}"
+RUNNER_LABELS="${RUNNER_LABELS:-vn-gaqc-docker,test-setup}"
+RUNNER_GROUP="${RUNNER_GROUP:-VN-Team}"
+ORGNAME="${ORGNAME:-Gravity-Global}"
 CURRENT_DATE=$(date +%Y%m%d)
 
 # Get GitHub token
+# Nếu chạy unattended (từ service/cron): bắt buộc GITHUB_TOKEN phải có trong env
+# Nếu chạy tay: hỏi nếu chưa có
 if [ -z "$GITHUB_TOKEN" ]; then
-    read -p "Enter github token: " GITHUB_TOKEN
-    echo
+    if [ -t 0 ]; then
+        # Có terminal → hỏi người dùng
+        read -rp "Enter github token: " GITHUB_TOKEN
+        echo
+    else
+        # Không có terminal (service/cron) → exit ngay, không treo
+        echo "ERROR: GITHUB_TOKEN chưa được đặt. Thêm vào .env hoặc export trước khi chạy." >&2
+        exit 1
+    fi
 fi
 
 # Set organization URLs
