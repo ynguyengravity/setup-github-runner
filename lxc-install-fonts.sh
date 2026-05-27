@@ -194,11 +194,33 @@ install_fonts_on() {
     " 2>/dev/null | sed 's/^/│    /' || INSTALL_EXIT=$?
 
     if [ "$INSTALL_EXIT" -eq 0 ]; then
+        # Fontconfig alias: map web font names → installed system font names
+        # Ví dụ: CSS 'Noto Sans JP' → 'Noto Sans CJK JP' (từ fonts-noto-cjk)
+        # Khi Google Fonts CDN không load được, browser vẫn tìm thấy font qua alias
+        echo -e "│  $(log "Configuring fontconfig aliases (web font → system font)...")"
+        pct exec "$CTID" -- bash -c "
+cat > /etc/fonts/conf.d/99-browser-font-aliases.conf << 'FONTEOF'
+<?xml version=\"1.0\"?>
+<!DOCTYPE fontconfig SYSTEM \"fonts.dtd\">
+<fontconfig>
+  <!-- Japanese: 'Noto Sans JP' (Google Fonts) → 'Noto Sans CJK JP' (system) -->
+  <alias><family>Noto Sans JP</family><prefer><family>Noto Sans CJK JP</family></prefer></alias>
+  <alias><family>Noto Serif JP</family><prefer><family>Noto Serif CJK JP</family></prefer></alias>
+  <!-- Korean -->
+  <alias><family>Noto Sans KR</family><prefer><family>Noto Sans CJK KR</family></prefer></alias>
+  <!-- Chinese Simplified -->
+  <alias><family>Noto Sans SC</family><prefer><family>Noto Sans CJK SC</family></prefer></alias>
+  <!-- Chinese Traditional -->
+  <alias><family>Noto Sans TC</family><prefer><family>Noto Sans CJK TC</family></prefer></alias>
+</fontconfig>
+FONTEOF
+        " 2>/dev/null | sed 's/^/│    /' || true
+
         # fc-cache
         echo -e "│  $(log "Rebuilding font cache...")"
         pct exec "$CTID" -- bash -c "fc-cache -fv 2>&1 | grep -E '^/|succeeded' | head -5" \
             2>/dev/null | sed 's/^/│    /' || true
-        echo -e "│  $(ok "Done! (${#AVAILABLE_PKGS[@]} fonts installed)")"
+        echo -e "│  $(ok "Done! (${#AVAILABLE_PKGS[@]} fonts + aliases installed)")"
         SUCCESS=$((SUCCESS + 1))
     else
         echo -e "│  $(err "Install thất bại (exit $INSTALL_EXIT)")"

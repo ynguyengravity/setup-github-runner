@@ -154,35 +154,6 @@ apt update -y
 apt install -y google-chrome-stable microsoft-edge-stable firefox xvfb libxss1 libasound2 libgtk-3-0 libnss3 libdrm2 libgbm1 libxshmfence1
 
 echo "✅ Browsers installed"
-
-# Install all fonts needed by browsers for proper rendering across all languages
-# (not relying on playwright --with-deps which trims font list in newer versions)
-# Lọc package khả dụng trước, tránh 1 package lỗi kéo cả batch fail
-FONT_PACKAGES="
-  fonts-liberation fonts-liberation2
-  fonts-dejavu-core fonts-dejavu-extra
-  fonts-ubuntu ttf-ubuntu-font-family
-  fonts-noto-color-emoji
-  fonts-noto-cjk fonts-noto-cjk-extra
-  fonts-wqy-zenhei fonts-wqy-microhei
-  fonts-ipafont-gothic fonts-ipafont-mincho
-  fonts-unfonts-core
-  fonts-kacst fonts-kacst-one fonts-arabeyes
-  fonts-indic
-  fonts-thai-tlwg fonts-tlwg-loma-otf
-  xfonts-cyrillic xfonts-scalable
-  fonts-freefont-ttf fonts-unifont
-  fontconfig fontconfig-config
-"
-AVAILABLE_FONTS=""
-for pkg in $FONT_PACKAGES; do
-  apt-cache show "$pkg" &>/dev/null && AVAILABLE_FONTS="$AVAILABLE_FONTS $pkg"
-done
-echo "Installing fonts: $AVAILABLE_FONTS"
-DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $AVAILABLE_FONTS
-fc-cache -fv
-
-echo "✅ All browser fonts installed"
 '
 
 
