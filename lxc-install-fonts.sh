@@ -9,7 +9,7 @@
 #   ./lxc-install-fonts.sh --dry-run    # chỉ liệt kê, không install
 # =============================================================================
 
-set -euo pipefail
+set -uo pipefail
 
 # --- Colors ---
 R='\033[0m'
@@ -149,11 +149,11 @@ install_fonts_on() {
         return
     fi
 
-    # apt-get update
+    # apt-get update (|| true: warning/key lỗi không làm chết script)
     echo -e "│  $(log "apt-get update...")"
-    pct exec "$CTID" -- bash -c "apt-get update -qq" 2>&1 \
-        | grep -v "^vm\|deprecated\|legacy\|DEPRECATION" \
-        | sed 's/^/│    /'
+    pct exec "$CTID" -- bash -c "apt-get update -qq 2>&1 \
+        | grep -v 'deprecated\|legacy\|DEPRECATION\|trusted.gpg'" \
+        2>/dev/null | sed 's/^/│    /' || true
 
     # Lọc chỉ lấy package khả dụng (tránh 1 package lỗi kéo cả batch fail)
     echo -e "│  $(log "Kiểm tra packages khả dụng...")"
@@ -169,7 +169,7 @@ install_fonts_on() {
     while IFS= read -r line; do
         if [[ "$line" == OK:* ]];   then AVAILABLE_PKGS+=("${line#OK:}"); fi
         if [[ "$line" == MISS:* ]]; then UNAVAILABLE_PKGS+=("${line#MISS:}"); fi
-    done < <(pct exec "$CTID" -- bash -c "$CHECK_SCRIPT" 2>/dev/null)
+    done < <(pct exec "$CTID" -- bash -c "$CHECK_SCRIPT" 2>/dev/null || true)
 
     if [ ${#UNAVAILABLE_PKGS[@]} -gt 0 ]; then
         dim "Không có (bỏ qua): ${UNAVAILABLE_PKGS[*]}"
@@ -187,16 +187,21 @@ install_fonts_on() {
     # apt-get install chỉ những package có sẵn
     local INSTALL_STR="${AVAILABLE_PKGS[*]}"
     echo -e "│  $(log "Installing fonts...")"
-    if pct exec "$CTID" -- bash -c "
-        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $INSTALL_STR
-    " 2>&1 | grep -v "^vm\|deprecated\|legacy" | sed 's/^/│    /'; then
+    local INSTALL_EXIT=0
+    pct exec "$CTID" -- bash -c "
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $INSTALL_STR 2>&1 \
+        | grep -v 'deprecated\|legacy\|DEPRECATION'
+    " 2>/dev/null | sed 's/^/│    /' || INSTALL_EXIT=$?
+
+    if [ "$INSTALL_EXIT" -eq 0 ]; then
         # fc-cache
         echo -e "│  $(log "Rebuilding font cache...")"
-        pct exec "$CTID" -- bash -c "fc-cache -fv" 2>&1 | grep -E "^/|succeeded" | head -5 | sed 's/^/│    /'
+        pct exec "$CTID" -- bash -c "fc-cache -fv 2>&1 | grep -E '^/|succeeded' | head -5" \
+            2>/dev/null | sed 's/^/│    /' || true
         echo -e "│  $(ok "Done! (${#AVAILABLE_PKGS[@]} fonts installed)")"
         SUCCESS=$((SUCCESS + 1))
     else
-        echo -e "│  $(err "Install thất bại")"
+        echo -e "│  $(err "Install thất bại (exit $INSTALL_EXIT)")"
         FAILED=$((FAILED + 1))
     fi
 
