@@ -57,9 +57,8 @@ pct create $PCTID $TEMPL_FILE \
 
 # Add important LXC configuration for Docker
 log "-- Applying special container configurations for Docker"
-pct set $PCTID -lxc-config="lxc.apparmor.profile=unconfined" 
 pct set $PCTID -lxc-config="lxc.cap.drop=" 
-pct set $PCTID -lxc-config="lxc.cgroup.devices.allow=a" 
+pct set $PCTID -lxc-config="lxc.cgroup2.devices.allow=a" 
 pct set $PCTID -lxc-config="lxc.mount.auto=proc:rw sys:rw"
 
 log "-- Resizing container to $PCTSIZE"

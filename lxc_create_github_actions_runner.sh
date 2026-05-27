@@ -67,8 +67,7 @@ log "-- Configuring LXC container for Docker compatibility"
 # Directly editing the container config file
 CONTAINER_CONFIG="/etc/pve/lxc/${PCTID}.conf"
 echo "# Docker support configuration" >> $CONTAINER_CONFIG
-echo "lxc.apparmor.profile: unconfined" >> $CONTAINER_CONFIG
-echo "lxc.cgroup.devices.allow: a" >> $CONTAINER_CONFIG
+echo "lxc.cgroup2.devices.allow: a" >> $CONTAINER_CONFIG
 echo "lxc.cap.drop: " >> $CONTAINER_CONFIG
 
 # Enable TUN/TAP for OpenVPN

@@ -26,6 +26,23 @@ log() {
   echo -e "\033[33m$text\033[0m"
 }
 
+sanitize_container_config() {
+    local container_id="$1"
+    local container_config="/etc/pve/lxc/${container_id}.conf"
+
+    if [ ! -f "$container_config" ]; then
+        return
+    fi
+
+    # Remove deprecated/overriding keys from older templates.
+    sed -i '/^lxc\.cgroup\.devices\.allow:/d' "$container_config"
+    sed -i '/^lxc\.apparmor\.profile:/d' "$container_config"
+
+    if ! grep -q '^lxc.cgroup2.devices.allow: a$' "$container_config"; then
+        echo "lxc.cgroup2.devices.allow: a" >> "$container_config"
+    fi
+}
+
 log "-- Cloning GitHub Actions runner from template container ID: ${SOURCE_CONTAINER_ID}"
 log "-- Setting up runner for Organization: ${ORGNAME}"
 log "-- Using runner labels: ${RUNNER_LABELS}"
@@ -38,6 +55,9 @@ if ! pct status $SOURCE_CONTAINER_ID >/dev/null 2>&1; then
     log "Please make sure you have run the master script first to create the template."
     exit 1
 fi
+
+log "-- Sanitizing source container config ${SOURCE_CONTAINER_ID}"
+sanitize_container_config $SOURCE_CONTAINER_ID
 
 # Get next available container ID
 NEW_PCTID=$(pvesh get /cluster/nextid)
@@ -63,6 +83,9 @@ log "-- Configuring cloned container ${NEW_PCTID}"
 # Note: Container config (/etc/pve/lxc/${NEW_PCTID}.conf) is automatically copied from source
 # This includes Docker support, TUN/TAP devices, and all LXC configurations
 log "-- Container config automatically inherited from template (ID: ${SOURCE_CONTAINER_ID})"
+
+log "-- Sanitizing cloned container config ${NEW_PCTID}"
+sanitize_container_config $NEW_PCTID
 
 # Update hostname in container
 pct set $NEW_PCTID --hostname github-runner-${NEW_PCTID}-${CURRENT_DATE}
