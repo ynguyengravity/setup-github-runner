@@ -125,12 +125,13 @@ export DEBIAN_FRONTEND=noninteractive
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
 
-# Chrome
+# Chrome (modern signed-by approach, no deprecated apt-key)
 if ! command -v google-chrome > /dev/null; then
   echo "Installing Google Chrome..."
-  rm -f /etc/apt/sources.list.d/google-chrome.list
-  wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | apt-key add -
-  echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list
+  curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | \
+    gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg
+  echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" \
+    > /etc/apt/sources.list.d/google-chrome.list
 fi
 
 # Edge
@@ -151,7 +152,8 @@ Pin-Priority: 1001" > /etc/apt/preferences.d/mozillateam-firefox
 fi
 
 apt update -y
-apt install -y google-chrome-stable microsoft-edge-stable firefox xvfb libxss1 libasound2 libgtk-3-0 libnss3 libdrm2 libgbm1 libxshmfence1
+# Ubuntu 24.04: libasound2 → libasound2t64, libgtk-3-0 → libgtk-3-0t64
+apt install -y google-chrome-stable microsoft-edge-stable firefox xvfb libxss1 libasound2t64 libgtk-3-0t64 libnss3 libdrm2 libgbm1 libxshmfence1
 
 echo "✅ Browsers installed"
 '
