@@ -186,6 +186,57 @@ npm --version
 echo "✅ Node.js installed"
 '
 
+# Install Playwright
+log "-- Installing Playwright and browser dependencies"
+pct exec $PCTID -- bash -c '
+set -e
+export DEBIAN_FRONTEND=noninteractive
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+
+# Install Playwright globally
+npm install -g playwright
+
+# Install system-level OS dependencies
+npx playwright install-deps
+
+# Download Playwright browsers — try mirrors in order, stop on first success
+PLAYWRIGHT_MIRRORS=(
+    ""                                                      # 1. Default CDN (playwright.azureedge.net)
+    "https://npmmirror.com/mirrors/playwright"             # 2. npmmirror (Asia-friendly)
+    "https://registry.npmmirror.com/-/binary/playwright"   # 3. npmmirror alternate path
+)
+
+PLAYWRIGHT_INSTALLED=false
+for mirror in "${PLAYWRIGHT_MIRRORS[@]}"; do
+    if [ -z "$mirror" ]; then
+        label="default CDN"
+        cmd="npx playwright install"
+    else
+        label="$mirror"
+        cmd="PLAYWRIGHT_DOWNLOAD_HOST=$mirror npx playwright install"
+    fi
+
+    echo "⏳ Trying Playwright download from: $label (timeout 180s)..."
+    if timeout 180 bash -c "$cmd"; then
+        echo "✅ Playwright browsers downloaded from: $label"
+        PLAYWRIGHT_INSTALLED=true
+        break
+    else
+        echo "⚠️  Failed or timed out: $label — trying next mirror..."
+    fi
+done
+
+if [ "$PLAYWRIGHT_INSTALLED" = false ]; then
+    echo "❌ All Playwright mirrors failed!"
+    exit 1
+fi
+
+# Verify
+npx playwright --version
+echo "✅ Playwright installed"
+'
+
 # Install OpenVPN
 log "-- Installing OpenVPN"
 pct exec $PCTID -- bash -c "export DEBIAN_FRONTEND=noninteractive && \
