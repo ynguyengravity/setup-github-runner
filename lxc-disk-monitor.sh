@@ -389,10 +389,57 @@ main() {
         fi
     done
 
+    # =========================================================================
+    # AUTO SCALE UP: tạo thêm container nếu số lượng hiện tại < LXC_COUNT
+    # =========================================================================
+    separator
+    local current_count=${#ids[@]}
+    local needed=$(( LXC_COUNT - current_count ))
+
+    info "📊 Số lượng LXC: ${current_count}/${LXC_COUNT}"
+
+    if [ "$needed" -gt 0 ]; then
+        warn "⚠️  Thiếu ${needed} container — cần tạo thêm để đủ ${LXC_COUNT}"
+
+        if $CHECK_ONLY; then
+            warn "   [CHECK-ONLY] Bỏ qua tạo mới"
+        elif in_maintenance_window; then
+            info "   🔧 Trong maintenance window → Tạo thêm ${needed} container..."
+            notify "🔧 *LXC Scale Up* | Hiện có: ${current_count}/${LXC_COUNT} | Đang tạo thêm ${needed}..."
+
+            local created=0
+            for (( i=1; i<=needed; i++ )); do
+                info "   Tạo container mới ${i}/${needed}..."
+                local new_id=""
+                if new_id=$(create_runner_container); then
+                    info "   ✅ Tạo xong container mới: $new_id (${i}/${needed})"
+                    (( created++ )) || true
+                    (( rebuilt++ )) || true
+                else
+                    error "   ❌ Tạo container ${i}/${needed} thất bại!"
+                    notify "❌ *LXC Scale Up FAILED* | Tạo container ${i}/${needed} thất bại"
+                    (( failed++ )) || true
+                    break  # dừng nếu một lần tạo thất bại
+                fi
+            done
+
+            info "   Tạo thêm xong: ${created}/${needed} container"
+            notify "✅ *LXC Scale Up Done* | Đã tạo thêm ${created}/${needed} | Tổng: $(( current_count + created ))/${LXC_COUNT}"
+        else
+            local current_hour
+            current_hour=$(date +%-H)
+            warn "   ⏳ Ngoài maintenance window (${current_hour}h) → Sẽ tạo thêm lúc ${MAINTENANCE_START}h"
+            notify "⚠️ *LXC thiếu* | ${current_count}/${LXC_COUNT} | Sẽ tạo thêm trong window ${MAINTENANCE_START}h–${MAINTENANCE_END}h"
+        fi
+    else
+        info "   ✅ Đủ số lượng (${current_count}/${LXC_COUNT}) — không cần tạo thêm"
+    fi
+
     separator
     info "📊 Kết quả:"
-    info "   ✅ Tái tạo thành công : $rebuilt container(s)"
-    info "   ⏭️  Bỏ qua (OK/offline): $skipped container(s)"
+    info "   LXC hiện có         : ${current_count}/${LXC_COUNT}"
+    info "   ✅ Tạo/tái tạo xong : $rebuilt container(s)"
+    info "   ⏭️  Bỏ qua (OK/ngoài window): $skipped container(s)"
     [ "$failed" -gt 0 ] && error "   ❌ Thất bại          : $failed container(s)"
     info "   Log file: $LOG_FILE"
     separator
