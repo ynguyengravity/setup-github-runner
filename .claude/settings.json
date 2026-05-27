@@ -17,7 +17,8 @@
       "Bash(curl -s \"https://raw.githubusercontent.com/microsoft/playwright/main/packages/playwright-core/src/server/registry/nativeDeps.ts\")",
       "Bash(curl -s \"https://raw.githubusercontent.com/microsoft/playwright/main/packages/playwright-core/src/server/registry/dependencies.ts\")",
       "Bash(git -C /Users/y.nguyen/projects/setup-github-runner show 2e58fbe --stat)",
-      "Bash(git -C /Users/y.nguyen/projects/setup-github-runner show 2e58fbe -p -- lxc_create_github_actions_runner.sh)"
+      "Bash(git -C /Users/y.nguyen/projects/setup-github-runner show 2e58fbe -p -- lxc_create_github_actions_runner.sh)",
+      "Bash(chmod +x /Users/y.nguyen/projects/setup-github-runner/lxc-install-fonts.sh)"
     ]
   }
 }
