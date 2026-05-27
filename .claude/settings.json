@@ -19,7 +19,8 @@
       "Bash(git -C /Users/y.nguyen/projects/setup-github-runner show 2e58fbe --stat)",
       "Bash(git -C /Users/y.nguyen/projects/setup-github-runner show 2e58fbe -p -- lxc_create_github_actions_runner.sh)",
       "Bash(chmod +x /Users/y.nguyen/projects/setup-github-runner/lxc-install-fonts.sh)",
-      "Bash(bash -n /Users/y.nguyen/projects/setup-github-runner/lxc-install-fonts.sh)"
+      "Bash(bash -n /Users/y.nguyen/projects/setup-github-runner/lxc-install-fonts.sh)",
+      "Bash(bash -n /Users/y.nguyen/projects/setup-github-runner/lxc_create_github_actions_runner.master.sh)"
     ]
   }
 }
