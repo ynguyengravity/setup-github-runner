@@ -70,7 +70,7 @@ sanitize_container_config $SOURCE_CONTAINER_ID
 
 # Get next available container ID
 NEW_PCTID=$(pvesh get /cluster/nextid)
-GITHUB_RUNNER_FILE=$(basename $GITHUB_RUNNER_URL)
+GITHUB_RUNNER_FILE=$(basename $GITHUB_RUNNER_URL)   # dùng làm tên file bên trong container
 
 log "-- Cloning container ${SOURCE_CONTAINER_ID} to new container ID: ${NEW_PCTID}"
 
@@ -135,36 +135,37 @@ if [ -z "$RUNNER_TOKEN" ]; then
     exit 1
 fi
 
-# Install GitHub Actions runner
-log "-- Installing GitHub Actions runner"
-pct exec $NEW_PCTID -- bash -c "mkdir -p /root/actions-runner"
+# Install GitHub Actions runner — tarball already pre-downloaded in template (master.sh)
+log "-- Installing GitHub Actions runner (using pre-downloaded tarball)"
+pct exec $NEW_PCTID -- bash -c "
+    set -e
+    export LANG=en_US.UTF-8
+    export LC_ALL=en_US.UTF-8
+    cd /root/actions-runner
 
-if [ -f "$GITHUB_RUNNER_FILE" ] && tar tzf $GITHUB_RUNNER_FILE > /dev/null 2>&1; then
-    log "-- Cached runner file is valid, copying to container: $GITHUB_RUNNER_FILE"
-    pct push $NEW_PCTID $GITHUB_RUNNER_FILE /root/actions-runner/$GITHUB_RUNNER_FILE
-else
-    if [ -f "$GITHUB_RUNNER_FILE" ]; then
-        log "-- Cached runner file is corrupted, re-downloading..."
-        rm -f $GITHUB_RUNNER_FILE
-    else
-        log "-- Runner file not found on host, downloading..."
+    if [ ! -f ${GITHUB_RUNNER_FILE} ]; then
+        echo '⚠️  Tarball not found in template, downloading fallback...'
+        curl -fsSL -o ${GITHUB_RUNNER_FILE} -L ${GITHUB_RUNNER_URL}
     fi
-    curl -o $GITHUB_RUNNER_FILE -L $GITHUB_RUNNER_URL
-    pct push $NEW_PCTID $GITHUB_RUNNER_FILE /root/actions-runner/$GITHUB_RUNNER_FILE
-fi
 
-pct exec $NEW_PCTID -- bash -c "export LANG=en_US.UTF-8 && \
-    export LC_ALL=en_US.UTF-8 && \
-    cd /root/actions-runner && \
-    tar xzf $GITHUB_RUNNER_FILE && \
+    echo '📦 Extracting...'
+    tar xzf ${GITHUB_RUNNER_FILE}
+
+    echo '🗑️  Removing tarball...'
+    rm -f ${GITHUB_RUNNER_FILE}
+
+    echo '⚙️  Configuring runner...'
     RUNNER_ALLOW_RUNASROOT=1 ./config.sh --unattended \
-    --url $RUNNER_URL \
-    --token $RUNNER_TOKEN \
-    --name github-runner-${NEW_PCTID}-${CURRENT_DATE} \
-    --labels $RUNNER_LABELS \
-    --runnergroup \"$RUNNER_GROUP\" && \
-    ./svc.sh install root && \
-    ./svc.sh start"
+        --url ${RUNNER_URL} \
+        --token ${RUNNER_TOKEN} \
+        --name github-runner-${NEW_PCTID}-${CURRENT_DATE} \
+        --labels ${RUNNER_LABELS} \
+        --runnergroup '${RUNNER_GROUP}'
+
+    ./svc.sh install root
+    ./svc.sh start
+    echo '✅ Runner installed and started'
+"
 
 # Configure runner service to start automatically on boot
 log "-- Configuring runner service to start automatically on boot"

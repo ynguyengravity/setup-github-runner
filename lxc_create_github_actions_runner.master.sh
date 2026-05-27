@@ -337,6 +337,18 @@ pct exec $PCTID -- bash -c "
     echo '==> Upgrade completed successfully'
 "
 # =================================
+# Pre-download GitHub Actions runner inside the container (so clone.sh can reuse it)
+log "-- Pre-downloading GitHub Actions runner inside container"
+pct exec $PCTID -- bash -c "
+    set -e
+    mkdir -p /root/actions-runner
+    cd /root/actions-runner
+    echo '⏳ Downloading GitHub Actions runner...'
+    curl -fsSL -o ${GITHUB_RUNNER_FILE} -L ${GITHUB_RUNNER_URL}
+    echo '✅ Runner tarball ready at /root/actions-runner/${GITHUB_RUNNER_FILE}'
+"
+
+# =================================
 log "-- Restarting container"
 pct restart $PCTID
 
