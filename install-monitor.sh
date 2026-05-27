@@ -32,10 +32,12 @@ mkdir -p "$INSTALL_DIR"
 
 # Copy files
 echo "📋 Copy script và config..."
-cp "${SCRIPT_DIR}/lxc-disk-monitor.sh" "${INSTALL_DIR}/lxc-disk-monitor.sh"
-cp "${SCRIPT_DIR}/lxc-monitor-ui.sh"  "${INSTALL_DIR}/lxc-monitor-ui.sh"
+cp "${SCRIPT_DIR}/lxc-disk-monitor.sh"                       "${INSTALL_DIR}/lxc-disk-monitor.sh"
+cp "${SCRIPT_DIR}/lxc-monitor-ui.sh"                         "${INSTALL_DIR}/lxc-monitor-ui.sh"
+cp "${SCRIPT_DIR}/lxc_create_github_actions_runner.clone.sh" "${INSTALL_DIR}/lxc_create_github_actions_runner.clone.sh"
 chmod +x "${INSTALL_DIR}/lxc-disk-monitor.sh"
 chmod +x "${INSTALL_DIR}/lxc-monitor-ui.sh"
+chmod +x "${INSTALL_DIR}/lxc_create_github_actions_runner.clone.sh"
 
 # Copy .env nếu chưa có
 if [ ! -f "${INSTALL_DIR}/.env" ]; then
