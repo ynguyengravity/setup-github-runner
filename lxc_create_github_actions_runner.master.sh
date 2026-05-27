@@ -352,7 +352,7 @@ pct exec $PCTID -- bash -c "
 
 # =================================
 log "-- Restarting container"
-pct restart $PCTID
+pct reboot $PCTID
 
 # log "-- Installing runner"
 # pct exec $PCTID -- bash -c "export LANG=en_US.UTF-8 && \
