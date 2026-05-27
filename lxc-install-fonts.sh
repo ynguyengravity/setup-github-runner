@@ -151,23 +151,49 @@ install_fonts_on() {
 
     # apt-get update
     echo -e "│  $(log "apt-get update...")"
-    if ! pct exec "$CTID" -- bash -c "apt-get update -qq" 2>&1 | sed 's/^/│    /'; then
-        echo -e "│  $(err "apt-get update thất bại")"
+    pct exec "$CTID" -- bash -c "apt-get update -qq" 2>&1 \
+        | grep -v "^vm\|deprecated\|legacy\|DEPRECATION" \
+        | sed 's/^/│    /'
+
+    # Lọc chỉ lấy package khả dụng (tránh 1 package lỗi kéo cả batch fail)
+    echo -e "│  $(log "Kiểm tra packages khả dụng...")"
+    local ALL_PKGS=("${FONT_PACKAGES[@]}")
+    local AVAILABLE_PKGS=()
+    local UNAVAILABLE_PKGS=()
+
+    local CHECK_SCRIPT=""
+    for pkg in "${ALL_PKGS[@]}"; do
+        CHECK_SCRIPT+="apt-cache show '$pkg' &>/dev/null && echo 'OK:$pkg' || echo 'MISS:$pkg';"$'\n'
+    done
+
+    while IFS= read -r line; do
+        if [[ "$line" == OK:* ]];   then AVAILABLE_PKGS+=("${line#OK:}"); fi
+        if [[ "$line" == MISS:* ]]; then UNAVAILABLE_PKGS+=("${line#MISS:}"); fi
+    done < <(pct exec "$CTID" -- bash -c "$CHECK_SCRIPT" 2>/dev/null)
+
+    if [ ${#UNAVAILABLE_PKGS[@]} -gt 0 ]; then
+        dim "Không có (bỏ qua): ${UNAVAILABLE_PKGS[*]}"
+    fi
+    echo -e "│  $(info "Sẽ install: ${#AVAILABLE_PKGS[@]}/${#ALL_PKGS[@]} packages")"
+
+    if [ ${#AVAILABLE_PKGS[@]} -eq 0 ]; then
+        echo -e "│  $(err "Không có package nào khả dụng")"
         echo -e "└──"
         echo ""
         FAILED=$((FAILED + 1))
         return
     fi
 
-    # apt-get install
-    echo -e "│  $(log "Installing ${#FONT_PACKAGES[@]} font packages...")"
+    # apt-get install chỉ những package có sẵn
+    local INSTALL_STR="${AVAILABLE_PKGS[*]}"
+    echo -e "│  $(log "Installing fonts...")"
     if pct exec "$CTID" -- bash -c "
-        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $PACKAGES_STR
-    " 2>&1 | sed 's/^/│    /'; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $INSTALL_STR
+    " 2>&1 | grep -v "^vm\|deprecated\|legacy" | sed 's/^/│    /'; then
         # fc-cache
         echo -e "│  $(log "Rebuilding font cache...")"
         pct exec "$CTID" -- bash -c "fc-cache -fv" 2>&1 | grep -E "^/|succeeded" | head -5 | sed 's/^/│    /'
-        echo -e "│  $(ok "Done!")"
+        echo -e "│  $(ok "Done! (${#AVAILABLE_PKGS[@]} fonts installed)")"
         SUCCESS=$((SUCCESS + 1))
     else
         echo -e "│  $(err "Install thất bại")"
