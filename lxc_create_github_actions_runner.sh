@@ -137,6 +137,38 @@ apt update -y
 apt install -y google-chrome-stable microsoft-edge-stable firefox xvfb libxss1 libasound2 libgtk-3-0 libnss3 libdrm2 libgbm1 libxshmfence1
 
 echo "✅ Browsers installed"
+
+# Install all fonts needed by browsers for proper rendering across all languages
+# (not relying on playwright --with-deps which trims font list in newer versions)
+apt install -y \
+  fonts-liberation \
+  fonts-liberation2 \
+  fonts-dejavu-core \
+  fonts-dejavu-extra \
+  ttf-ubuntu-font-family \
+  fonts-noto-color-emoji \
+  fonts-noto-cjk \
+  fonts-noto-cjk-extra \
+  fonts-wqy-zenhei \
+  fonts-wqy-microhei \
+  fonts-ipafont-gothic \
+  fonts-ipafont-mincho \
+  fonts-unfonts-core \
+  fonts-kacst \
+  fonts-kacst-one \
+  fonts-arabeyes \
+  fonts-indic \
+  fonts-thai-tlwg \
+  fonts-tlwg-loma-otf \
+  xfonts-cyrillic \
+  xfonts-scalable \
+  fonts-freefont-ttf \
+  fonts-unifont \
+  fontconfig \
+  fontconfig-config
+fc-cache -fv
+
+echo "✅ All browser fonts installed"
 '
 
 

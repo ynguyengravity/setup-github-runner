@@ -9,7 +9,15 @@
       "Bash(chmod +x /Users/y.nguyen/projects/setup-github-runner/uninstall-monitor.sh)",
       "Bash(bash -n /Users/y.nguyen/projects/setup-github-runner/uninstall-monitor.sh)",
       "Bash(chmod +x /Users/y.nguyen/projects/setup-github-runner/monitor-menu.sh)",
-      "Bash(bash -n /Users/y.nguyen/projects/setup-github-runner/monitor-menu.sh)"
+      "Bash(bash -n /Users/y.nguyen/projects/setup-github-runner/monitor-menu.sh)",
+      "Bash(bash -n /Users/y.nguyen/projects/setup-github-runner/install-monitor.sh)",
+      "Bash(git -C /Users/y.nguyen/projects/setup-github-runner log --oneline -15)",
+      "Bash(git -C /Users/y.nguyen/projects/setup-github-runner show 47672f0 --stat)",
+      "Bash(git -C /Users/y.nguyen/projects/setup-github-runner diff 47672f0~1 47672f0 -- lxc_create_github_actions_runner.sh)",
+      "Bash(curl -s \"https://raw.githubusercontent.com/microsoft/playwright/main/packages/playwright-core/src/server/registry/nativeDeps.ts\")",
+      "Bash(curl -s \"https://raw.githubusercontent.com/microsoft/playwright/main/packages/playwright-core/src/server/registry/dependencies.ts\")",
+      "Bash(git -C /Users/y.nguyen/projects/setup-github-runner show 2e58fbe --stat)",
+      "Bash(git -C /Users/y.nguyen/projects/setup-github-runner show 2e58fbe -p -- lxc_create_github_actions_runner.sh)"
     ]
   }
 }
