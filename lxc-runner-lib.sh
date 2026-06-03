@@ -125,6 +125,9 @@ lxc_destroy_container() {
     fi
 
     info "Dừng container $vmid ($hostname)..."
+
+    # Thử shutdown trước để giảm khả năng container bị kẹt trạng thái.
+    pct shutdown "$vmid" --timeout 30 2>/dev/null || true
     pct stop "$vmid" --timeout 30 2>/dev/null || true
 
     # Chờ container thật sự dừng để tránh race-condition khi destroy.
@@ -146,8 +149,27 @@ lxc_destroy_container() {
     fi
 
     if lxc_is_running "$vmid"; then
-        error "Không thể dừng container $vmid, hủy thao tác destroy để đảm bảo an toàn"
-        return 1
+        warn "Container $vmid vẫn running, thử unlock + destroy cưỡng bức..."
+        pct unlock "$vmid" 2>/dev/null || true
+
+        # Một số phiên bản pct hỗ trợ --force, nếu không có thì fallback lệnh thường.
+        local force_destroy_output=""
+        if pct destroy --help 2>/dev/null | grep -q -- '--force'; then
+            if ! force_destroy_output=$(pct destroy "$vmid" --force 1 --destroy-unreferenced-disks 1 --purge 1 2>&1); then
+                error "Force destroy container $vmid thất bại: $force_destroy_output"
+                return 1
+            fi
+            ok "✅ Đã force-destroy container $vmid"
+            return 0
+        fi
+
+        if ! force_destroy_output=$(pct destroy "$vmid" --destroy-unreferenced-disks 1 --purge 1 2>&1); then
+            error "Không thể dừng/xóa container $vmid sau mọi fallback: $force_destroy_output"
+            return 1
+        fi
+
+        ok "✅ Đã xóa container $vmid (fallback path)"
+        return 0
     fi
 
     info "Xóa container $vmid ($hostname)..."
