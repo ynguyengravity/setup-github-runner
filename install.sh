@@ -11,6 +11,13 @@ echo "=== Cài đặt LXC Runner (Python) ==="
 command -v pct &>/dev/null || { echo "❌ Không phải Proxmox VE!"; exit 1; }
 command -v python3 &>/dev/null || { echo "❌ python3 chưa được cài!"; exit 1; }
 
+# Cài python3-venv nếu chưa có (Debian/Ubuntu không có sẵn)
+if ! python3 -m venv --help &>/dev/null; then
+    PY_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+    echo "📦 Cài python${PY_VER}-venv..."
+    apt-get install -y "python${PY_VER}-venv"
+fi
+
 mkdir -p "$INSTALL_DIR"
 
 # Copy toàn bộ project
