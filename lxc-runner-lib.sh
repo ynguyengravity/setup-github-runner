@@ -126,10 +126,50 @@ lxc_destroy_container() {
 
     info "Dừng container $vmid ($hostname)..."
     pct stop "$vmid" --timeout 30 2>/dev/null || true
-    sleep 5
+
+    # Chờ container thật sự dừng để tránh race-condition khi destroy.
+    local waited=0
+    while lxc_is_running "$vmid" && [ "$waited" -lt 30 ]; do
+        sleep 2
+        waited=$(( waited + 2 ))
+    done
+
+    if lxc_is_running "$vmid"; then
+        warn "Container $vmid vẫn đang chạy sau stop thường, thử force-stop..."
+        pct stop "$vmid" --timeout 10 --overrule-shutdown 1 2>/dev/null || true
+
+        waited=0
+        while lxc_is_running "$vmid" && [ "$waited" -lt 20 ]; do
+            sleep 2
+            waited=$(( waited + 2 ))
+        done
+    fi
+
+    if lxc_is_running "$vmid"; then
+        error "Không thể dừng container $vmid, hủy thao tác destroy để đảm bảo an toàn"
+        return 1
+    fi
 
     info "Xóa container $vmid ($hostname)..."
-    pct destroy "$vmid" --destroy-unreferenced-disks 1 --purge 1
+    local destroy_output=""
+    if ! destroy_output=$(pct destroy "$vmid" --destroy-unreferenced-disks 1 --purge 1 2>&1); then
+        if echo "$destroy_output" | grep -qi "container is running"; then
+            warn "Destroy báo container đang chạy, thử stop + destroy lần nữa..."
+            pct stop "$vmid" --timeout 10 --overrule-shutdown 1 2>/dev/null || true
+            sleep 2
+
+            if lxc_is_running "$vmid"; then
+                error "Container $vmid vẫn running sau retry, cần xử lý thủ công"
+                return 1
+            fi
+
+            pct destroy "$vmid" --destroy-unreferenced-disks 1 --purge 1
+        else
+            error "Destroy container $vmid thất bại: $destroy_output"
+            return 1
+        fi
+    fi
+
     ok "✅ Đã xóa container $vmid"
 }
 
