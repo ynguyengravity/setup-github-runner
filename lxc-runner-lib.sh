@@ -21,6 +21,48 @@
 declare -f ok &>/dev/null || ok() { info "$1"; }
 
 # -----------------------------------------------------------------------------
+# [Internal] Tương thích option pct giữa các phiên bản Proxmox
+# -----------------------------------------------------------------------------
+_pct_has_option() {
+    local subcmd="$1"
+    local option="$2"
+    pct "$subcmd" --help 2>/dev/null | grep -q -- "$option"
+}
+
+_pct_shutdown_soft() {
+    local vmid="$1"
+    if _pct_has_option shutdown "--timeout"; then
+        pct shutdown "$vmid" --timeout 30 2>/dev/null || true
+    else
+        pct shutdown "$vmid" 2>/dev/null || true
+    fi
+}
+
+_pct_stop_soft() {
+    local vmid="$1"
+    if _pct_has_option stop "--timeout"; then
+        pct stop "$vmid" --timeout 30 2>/dev/null || true
+    else
+        pct stop "$vmid" 2>/dev/null || true
+    fi
+}
+
+_pct_stop_force() {
+    local vmid="$1"
+
+    if _pct_has_option stop "--overrule-shutdown"; then
+        if _pct_has_option stop "--timeout"; then
+            pct stop "$vmid" --timeout 10 --overrule-shutdown 1 2>/dev/null || true
+        else
+            pct stop "$vmid" --overrule-shutdown 1 2>/dev/null || true
+        fi
+    else
+        # Fallback cho bản không có --overrule-shutdown
+        _pct_stop_soft "$vmid"
+    fi
+}
+
+# -----------------------------------------------------------------------------
 # Kiểm tra container có đang chạy không
 # -----------------------------------------------------------------------------
 lxc_is_running() {
@@ -127,8 +169,8 @@ lxc_destroy_container() {
     info "Dừng container $vmid ($hostname)..."
 
     # Thử shutdown trước để giảm khả năng container bị kẹt trạng thái.
-    pct shutdown "$vmid" --timeout 30 2>/dev/null || true
-    pct stop "$vmid" --timeout 30 2>/dev/null || true
+    _pct_shutdown_soft "$vmid"
+    _pct_stop_soft "$vmid"
 
     # Chờ container thật sự dừng để tránh race-condition khi destroy.
     local waited=0
@@ -139,7 +181,7 @@ lxc_destroy_container() {
 
     if lxc_is_running "$vmid"; then
         warn "Container $vmid vẫn đang chạy sau stop thường, thử force-stop..."
-        pct stop "$vmid" --timeout 10 --overrule-shutdown 1 2>/dev/null || true
+        _pct_stop_force "$vmid"
 
         waited=0
         while lxc_is_running "$vmid" && [ "$waited" -lt 20 ]; do
@@ -177,7 +219,7 @@ lxc_destroy_container() {
     if ! destroy_output=$(pct destroy "$vmid" --destroy-unreferenced-disks 1 --purge 1 2>&1); then
         if echo "$destroy_output" | grep -qi "container is running"; then
             warn "Destroy báo container đang chạy, thử stop + destroy lần nữa..."
-            pct stop "$vmid" --timeout 10 --overrule-shutdown 1 2>/dev/null || true
+            _pct_stop_force "$vmid"
             sleep 2
 
             if lxc_is_running "$vmid"; then
