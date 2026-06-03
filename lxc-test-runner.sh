@@ -97,44 +97,6 @@ separator() {
 # shellcheck source=lxc-runner-lib.sh
 source "${SCRIPT_DIR}/lxc-runner-lib.sh"
 
-# Liệt kê các container github-runner đang chạy
-list_runners() {
-    local parallel_jobs="${LIST_PARALLEL_JOBS:-8}"
-    local vmids
-    vmids=$(pvesh get /nodes/localhost/lxc --output-format json 2>/dev/null \
-        | grep -o '"vmid":[0-9]*' | grep -o '[0-9]*' || true)
-
-    [ -z "$vmids" ] && return 0
-
-    local tmp_dir
-    tmp_dir=$(mktemp -d)
-
-    for vmid in $vmids; do
-        (
-            local hn st
-            hn=$(pct config "$vmid" 2>/dev/null | grep '^hostname:' | awk '{print $2}' || echo "")
-            if echo "$hn" | grep -q "github-runner"; then
-                st=$(pct status "$vmid" 2>/dev/null | awk '{print $2}' || echo "?")
-                printf "%s|%s|%s\n" "$vmid" "$hn" "$st" > "${tmp_dir}/${vmid}.row"
-            fi
-        ) &
-
-        while [ "$(jobs -pr | wc -l)" -ge "$parallel_jobs" ]; do
-            sleep 0.1
-        done
-    done
-
-    wait
-
-    if ls "${tmp_dir}"/*.row >/dev/null 2>&1; then
-        cat "${tmp_dir}"/*.row \
-            | sort -t '|' -k1,1n \
-            | awk -F'|' '{printf "  %-6s %-40s %s\n", $1, $2, $3}'
-    fi
-
-    rm -rf "$tmp_dir"
-}
-
 # ── MAIN ──────────────────────────────────────────────────────────────────────
 main() {
     separator
@@ -147,21 +109,9 @@ main() {
     # Chọn container cần test
     if [ -z "$TARGET_VMID" ]; then
         echo ""
-        echo -ne "  ${BOLD}Nhập Container ID cần test (Enter để mở danh sách, 0 để huỷ): ${R}"
+        echo -ne "  ${BOLD}Nhập Container ID cần test (0 để huỷ): ${R}"
         read -r TARGET_VMID
-
         [ "$TARGET_VMID" = "0" ] && { info "Đã huỷ."; exit 0; }
-
-        # Chỉ scan toàn bộ khi người dùng không nhập VMID.
-        if [ -z "$TARGET_VMID" ]; then
-            echo ""
-            echo -e "  ${BOLD}Danh sách GitHub Runner containers đang có (scan song song):${R}"
-            list_runners || echo "  (không tìm thấy, hoặc chưa có quyền)"
-            echo ""
-            echo -ne "  ${BOLD}Nhập Container ID cần test (0 để huỷ): ${R}"
-            read -r TARGET_VMID
-            [ "$TARGET_VMID" = "0" ] && { info "Đã huỷ."; exit 0; }
-        fi
     fi
 
     # Validate VMID

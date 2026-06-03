@@ -310,7 +310,17 @@ do_test_runner() {
 
     local test_script="${SCRIPT_DIR}/lxc-test-runner.sh"
     if [ ! -f "$test_script" ]; then
+        test_script="${INSTALL_DIR}/lxc-test-runner.sh"
+    fi
+    if [ ! -f "$test_script" ]; then
         echo -e "  ${RED}❌ Không tìm thấy lxc-test-runner.sh${R}"
+        pause; return
+    fi
+
+    echo -ne "  ${BOLD}Nhập Container ID cần test (0 để huỷ): ${R}"
+    read -r vmid
+    if [ "$vmid" = "0" ] || [ -z "$vmid" ]; then
+        echo "  Đã huỷ."
         pause; return
     fi
 
@@ -323,8 +333,8 @@ do_test_runner() {
     read -r mode_choice
 
     case "$mode_choice" in
-        1) bash "$test_script" ;;
-        2) bash "$test_script" --dry-run ;;
+        1) bash "$test_script" "$vmid" ;;
+        2) bash "$test_script" "$vmid" --dry-run ;;
         0) return ;;
         *) echo -e "  ${RED}Lựa chọn không hợp lệ.${R}"; sleep 1; return ;;
     esac

@@ -1,0 +1,19 @@
+[Unit]
+Description=LXC GitHub Runner Disk Monitor
+Documentation=https://github.com/ynguyengravity/setup-github-runner
+After=network-online.target pve-cluster.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/lxc-monitor/venv/bin/lxc-runner --env-file /opt/lxc-monitor/.env monitor
+User=root
+Group=root
+WorkingDirectory=/opt/lxc-monitor
+TimeoutStartSec=1800
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lxc-disk-monitor
+
+[Install]
+WantedBy=multi-user.target

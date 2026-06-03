@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "lxc-runner"
+version = "1.0.0"
+requires-python = ">=3.11"
+dependencies = [
+    "requests>=2.31.0",
+    "python-dotenv>=1.0.0",
+    "rich>=13.7.0",
+    "click>=8.1.0",
+]
+
+[project.scripts]
+lxc-runner = "lxc_runner.cli:cli"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["lxc_runner*"]
+
+[tool.setuptools.package-data]
+lxc_runner = ["../container_scripts/*.sh"]
