@@ -103,6 +103,9 @@ show_menu() {
     echo -e "  ${CYN}14${R} 📄 Xem log realtime (tail -f)"
     echo -e "  ${CYN}15${R} 📖 Xem hướng dẫn setup"
     echo ""
+    echo -e "  ${BOLD}─── Testing ───────────────────────────────────${R}"
+    echo -e "  ${CYN}16${R} 🧪 Test full cycle: deregister → destroy → clone → verify"
+    echo ""
     echo -e "  ${RED}0${R}  ❌ Thoát"
     echo ""
     echo -ne "  ${BOLD}Chọn: ${R}"
@@ -301,6 +304,34 @@ do_guide() {
     fi
 }
 
+do_test_runner() {
+    header
+    echo -e "  ${BOLD}🧪 Test Full Cycle — Deregister → Destroy → Clone → Verify${R}\n"
+
+    local test_script="${SCRIPT_DIR}/lxc-test-runner.sh"
+    if [ ! -f "$test_script" ]; then
+        echo -e "  ${RED}❌ Không tìm thấy lxc-test-runner.sh${R}"
+        pause; return
+    fi
+
+    echo -e "  ${YLW}Chọn chế độ chạy:${R}"
+    echo -e "  ${CYN}1${R}  Thật   — xóa và tạo lại container"
+    echo -e "  ${CYN}2${R}  Dry-run — mô phỏng, không thay đổi thật"
+    echo -e "  ${CYN}0${R}  Huỷ"
+    echo ""
+    echo -ne "  ${BOLD}Chọn: ${R}"
+    read -r mode_choice
+
+    case "$mode_choice" in
+        1) bash "$test_script" ;;
+        2) bash "$test_script" --dry-run ;;
+        0) return ;;
+        *) echo -e "  ${RED}Lựa chọn không hợp lệ.${R}"; sleep 1; return ;;
+    esac
+
+    pause
+}
+
 # ── Main loop ─────────────────────────────────────────────────────────────────
 main() {
     # Kiểm tra root (một số action cần root)
@@ -331,6 +362,7 @@ main() {
             13) do_log "view" ;;
             14) do_log "tail" ;;
             15) do_guide ;;
+            16) do_test_runner ;;
             0)  clear_screen; echo -e "  ${DIM}Thoát.${R}\n"; exit 0 ;;
             *)  echo -e "\n  ${RED}❌ Lựa chọn không hợp lệ.${R}"; sleep 1 ;;
         esac

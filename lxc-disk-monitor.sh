@@ -79,6 +79,13 @@ MAINTENANCE_END="${MAINTENANCE_END:-6}"       # 6 AM
 CLONE_SCRIPT="${SCRIPT_DIR}/lxc_create_github_actions_runner.clone.sh"
 
 # =============================================================================
+# SHARED LIBRARY
+# =============================================================================
+
+# shellcheck source=lxc-runner-lib.sh
+# (sourced sau khi định nghĩa xong logging để lib dùng được info/warn/error)
+
+# =============================================================================
 # LOGGING
 # =============================================================================
 
@@ -174,116 +181,15 @@ in_maintenance_window() {
     fi
 }
 
-# Kiểm tra container có đang chạy không
-is_running() {
-    local vmid="$1"
-    pct status "$vmid" 2>/dev/null | grep -q "status: running"
-}
-
-# Kiểm tra disk usage (%) của container
+# Kiểm tra disk usage (%) của container  (monitor-specific, không vào lib)
 get_disk_usage() {
     local vmid="$1"
-    # Lấy % dùng của partition root, bỏ ký tự %
     pct exec "$vmid" -- bash -c "df / --output=pcent | tail -1 | tr -d ' %'" 2>/dev/null || echo "0"
 }
 
-# Lấy hostname của container
-get_hostname() {
-    local vmid="$1"
-    pct config "$vmid" 2>/dev/null | grep '^hostname:' | awk '{print $2}' || echo "unknown-$vmid"
-}
-
-# Hủy đăng ký runner khỏi GitHub (graceful removal)
-deregister_runner() {
-    local runner_name="$1"
-    info "Hủy đăng ký runner '$runner_name' khỏi GitHub..."
-
-    local remove_token
-    remove_token=$(curl -s -L \
-        -X POST \
-        -H "Accept: application/vnd.github+json" \
-        -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-        -H "X-GitHub-Api-Version: 2022-11-28" \
-        "https://api.github.com/orgs/${ORGNAME}/actions/runners/remove-token" \
-        | grep -o '"token":"[^"]*"' | grep -o '[^"]*$' || echo "")
-
-    if [ -z "$remove_token" ]; then
-        warn "Không lấy được remove token, runner sẽ tự offline sau khi container bị xóa"
-        return 0
-    fi
-
-    # Thử chạy lệnh config remove trong container nếu còn sống
-    # (nếu container đã stop thì bỏ qua)
-    info "Remove token lấy thành công (runner sẽ tự unregister)"
-}
-
-# Xóa LXC container
-destroy_container() {
-    local vmid="$1"
-    local hostname="$2"
-
-    if $DRY_RUN; then
-        warn "[DRY-RUN] Sẽ xóa container $vmid ($hostname)"
-        return 0
-    fi
-
-    info "Dừng container $vmid ($hostname)..."
-    pct stop "$vmid" --timeout 30 2>/dev/null || true
-    sleep 5
-
-    info "Xóa container $vmid ($hostname)..."
-    pct destroy "$vmid" --destroy-unreferenced-disks 1 --purge 1
-    info "✅ Đã xóa container $vmid"
-}
-
-# Clone LXC container mới từ template bằng clone script
-create_runner_container() {
-    if $DRY_RUN; then
-        warn "[DRY-RUN] Sẽ clone container mới từ template ID: ${SOURCE_CONTAINER_ID}"
-        warn "[DRY-RUN] Script: ${CLONE_SCRIPT}"
-        return 0
-    fi
-
-    if [ ! -f "$CLONE_SCRIPT" ]; then
-        error "Không tìm thấy clone script: $CLONE_SCRIPT"
-        return 1
-    fi
-
-    # Bắt buộc phải có token trước khi gọi clone script
-    if [ -z "$GITHUB_TOKEN" ]; then
-        error "GITHUB_TOKEN chưa được đặt trong .env — không thể tạo runner"
-        return 1
-    fi
-
-    info "Gọi clone script: $CLONE_SCRIPT"
-    info "Template source container ID: ${SOURCE_CONTAINER_ID}"
-
-    # Pass tất cả biến trực tiếp vào env của lệnh gọi
-    # → clone script nhận được dù có hardcode hay không
-    local exit_code=0
-    env \
-        GITHUB_TOKEN="$GITHUB_TOKEN" \
-        SOURCE_CONTAINER_ID="$SOURCE_CONTAINER_ID" \
-        ORGNAME="$ORGNAME" \
-        RUNNER_LABELS="$RUNNER_LABELS" \
-        RUNNER_GROUP="$RUNNER_GROUP" \
-        GITHUB_RUNNER_URL="$GITHUB_RUNNER_URL" \
-        bash "$CLONE_SCRIPT" 2>&1 | tee -a "$LOG_FILE" || exit_code=$?
-
-    if [ "$exit_code" -ne 0 ]; then
-        error "❌ Clone script thất bại (exit code: $exit_code)"
-        return 1
-    fi
-
-    info "✅ Clone script hoàn tất thành công"
-
-    # Lấy container ID vừa tạo (container mới nhất có tên github-runner-*)
-    local new_id
-    new_id=$(pvesh get /nodes/localhost/lxc --output-format json 2>/dev/null \
-        | grep -o '"vmid":[0-9]*' | grep -o '[0-9]*' \
-        | sort -n | tail -1)
-    echo "$new_id"
-}
+# Load shared library (sau khi logging đã được định nghĩa)
+# shellcheck source=lxc-runner-lib.sh
+source "${SCRIPT_DIR}/lxc-runner-lib.sh"
 
 # =============================================================================
 # MAIN LOGIC
@@ -322,11 +228,11 @@ main() {
     for vmid in "${ids[@]}"; do
         separator
         local hostname
-        hostname=$(get_hostname "$vmid")
+        hostname=$(lxc_get_hostname "$vmid")
         info "🔍 Kiểm tra container [$vmid] - $hostname"
 
         # Kiểm tra container có đang chạy không
-        if ! is_running "$vmid"; then
+        if ! lxc_is_running "$vmid"; then
             warn "   Container $vmid không đang chạy (trạng thái: $(pct status "$vmid" 2>/dev/null || echo 'unknown'))"
             warn "   Bỏ qua container này."
             (( skipped++ )) || true
@@ -359,14 +265,14 @@ main() {
                 notify "⚠️ *LXC Disk Full* | \`$vmid\` ($hostname) | ${usage}% | Đang rebuild..."
 
                 # Hủy đăng ký runner
-                deregister_runner "$hostname"
+                lxc_deregister_runner "$hostname"
 
                 # Xóa container cũ
-                destroy_container "$vmid" "$hostname"
+                lxc_destroy_container "$vmid" "$hostname"
 
                 # Tạo container mới bằng clone script
                 local new_id=""
-                if new_id=$(create_runner_container); then
+                if new_id=$(lxc_create_runner); then
                     info "   ✅ Rebuild xong! Container mới: $new_id"
                     notify "✅ *LXC Rebuilt* | Cũ: \`$vmid\` → Mới: \`$new_id\`"
                     (( rebuilt++ )) || true
@@ -411,7 +317,7 @@ main() {
             for (( i=1; i<=needed; i++ )); do
                 info "   Tạo container mới ${i}/${needed}..."
                 local new_id=""
-                if new_id=$(create_runner_container); then
+                if new_id=$(lxc_create_runner); then
                     info "   ✅ Tạo xong container mới: $new_id (${i}/${needed})"
                     (( created++ )) || true
                     (( rebuilt++ )) || true
