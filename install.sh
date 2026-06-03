@@ -28,9 +28,9 @@ rsync -a --exclude='.git' --exclude='*.pyc' --exclude='__pycache__' \
 # Tạo virtualenv và cài dependencies
 echo "🐍 Tạo virtualenv và cài packages..."
 python3 -m venv "${INSTALL_DIR}/venv"
-"${INSTALL_DIR}/venv/bin/pip" install -q --upgrade pip
+"${INSTALL_DIR}/venv/bin/pip" install -q --upgrade pip setuptools
 "${INSTALL_DIR}/venv/bin/pip" install -q -r "${INSTALL_DIR}/requirements.txt"
-"${INSTALL_DIR}/venv/bin/pip" install -q -e "${INSTALL_DIR}"
+"${INSTALL_DIR}/venv/bin/pip" install -q "${INSTALL_DIR}"
 
 # Cấu hình .env
 if [ ! -f "${INSTALL_DIR}/.env" ]; then
