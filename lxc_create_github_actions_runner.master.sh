@@ -2,7 +2,7 @@
 
 set -e
 
-GITHUB_RUNNER_URL="https://github.com/actions/runner/releases/download/v2.334.0/actions-runner-linux-x64-2.334.0.tar.gz"
+GITHUB_RUNNER_URL="https://github.com/actions/runner/releases/download/v2.338.0/actions-runner-linux-x64-2.338.0.tar.gz"
 TEMPL_URL="http://download.proxmox.com/images/system/ubuntu-24.04-standard_24.04-2_amd64.tar.zst"
 PCTSIZE="50G"
 RUNNER_LABELS="vn-gaqc-docker,test-setup"
@@ -10,15 +10,6 @@ RUNNER_LABELS="vn-gaqc-docker,test-setup"
 RUNNER_GROUP="VN-Team"
 ORGNAME="Gravity-Global"
 CURRENT_DATE=$(date +%Y%m%d)
-
-if [ -z "$GITHUB_TOKEN" ]; then
-    read -p "Enter github token: " GITHUB_TOKEN
-    echo
-fi
-
-# Set organization URLs
-RUNNER_URL="https://github.com/${ORGNAME}"
-API_URL="https://api.github.com/orgs/${ORGNAME}/actions/runners/registration-token"
 
 log() {
   local text="$1"
@@ -43,12 +34,12 @@ if [ -f "$TEMPL_FILE" ]; then
     log "-- Template $TEMPL_FILE already exists, skipping download."
 else
     log "-- Downloading $TEMPL_FILE template..."
-    curl -q -C - -o $TEMPL_FILE $TEMPL_URL
+    curl -fL -C - -o $TEMPL_FILE $TEMPL_URL
 fi
 
 _download_runner() {
     log "-- Downloading GitHub runner $GITHUB_RUNNER_FILE..."
-    curl -o $GITHUB_RUNNER_FILE -L $GITHUB_RUNNER_URL
+    curl -f -o $GITHUB_RUNNER_FILE -L $GITHUB_RUNNER_URL
 }
 
 if [ -f "$GITHUB_RUNNER_FILE" ]; then
@@ -95,7 +86,19 @@ echo "lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file" >> $CONTA
 
 log "-- Starting container"
 pct start $PCTID
-sleep 10
+
+# Wait for network/DNS (DHCP) instead of a fixed sleep
+log "-- Waiting for container network"
+for i in $(seq 1 30); do
+    if pct exec $PCTID -- getent hosts archive.ubuntu.com > /dev/null 2>&1; then
+        break
+    fi
+    if [ "$i" -eq 30 ]; then
+        log "ERROR: Container $PCTID has no network after 60s"
+        exit 1
+    fi
+    sleep 2
+done
 
 # Create TUN device if it doesn't exist
 log "-- Setting up TUN device"
@@ -178,7 +181,7 @@ export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
 
 # Install Node.js using NodeSource repository
-curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
 apt-get install -y nodejs
 
 # Verify Node.js installation
@@ -292,31 +295,7 @@ pct exec $PCTID -- bash -c "export LANG=en_US.UTF-8 && \
     rm -rf awscliv2.zip aws && \
     ln -sf /usr/local/bin/aws /usr/bin/aws && \
     ln -sf /usr/local/bin/aws_completer /usr/bin/aws_completer && \
-    echo 'export PATH=$PATH:/usr/local/bin:/usr/bin' >> /root/.bashrc && \
-    echo 'export PATH=$PATH:/usr/local/bin:/usr/bin' >> /etc/environment && \
-    source /etc/environment && \
     aws --version"
-
-# =================================
-log "-- Getting runner installation token"
-log "-- Using API URL: $API_URL"
-RES=$(curl -q -L \
-  -X POST \
-  -H "Accept: application/vnd.github+json" \
-  -H "Authorization: Bearer $GITHUB_TOKEN" \
-  -H "X-GitHub-Api-Version: 2022-11-28" \
-  $API_URL)
-
-# Hiển thị response cho người dùng
-echo "API Response: $RES"
-
-RUNNER_TOKEN=$(echo $RES | grep -o '"token": "[^"]*' | grep -o '[^"]*$')
-
-if [ -z "$RUNNER_TOKEN" ]; then
-    log "ERROR: Failed to get runner token. Please check your token and organization name."
-    log "Make sure your token has admin:org permission for organization runners."
-    exit 1
-fi
 
 # =================================
 log "-- Installing upgrade"
