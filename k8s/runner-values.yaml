@@ -12,7 +12,7 @@ runnerScaleSetName: "vn-gaqc-docker"   # = runs-on của workflow
 runnerGroup: "VN-Team"                 # group của runner LXC cũ
 
 minRunners: 0
-maxRunners: 8                          # tăng dần sau khi gỡ LXC cũ (xem guide, mục Cheat sheet)
+maxRunners: 18                         # = 2 worker × 9 CPU allocatable / 1 CPU mỗi pod (giới hạn thật là CPU host)
 
 controllerServiceAccount:
   namespace: arc-systems
@@ -75,8 +75,10 @@ template:
             command: ["docker", "info"]
           failureThreshold: 24
           periodSeconds: 5
+        # Job browser (Chrome + Xvfb trong docker compose) chạy trong dind, đo được ~1,2 CPU/job:
+        # request 750m (+250m của runner = 1 CPU/pod) để scheduler không nhồi quá CPU thật
         resources:
-          requests: { cpu: 250m, memory: 512Mi, ephemeral-storage: 4Gi }
+          requests: { cpu: 750m, memory: 512Mi, ephemeral-storage: 4Gi }
           limits: { memory: 2Gi }
         volumeMounts:
           - name: work

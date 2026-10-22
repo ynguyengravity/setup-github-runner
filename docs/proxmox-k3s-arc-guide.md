@@ -18,9 +18,9 @@ Tài liệu liên quan:
 ### 1.1 Tóm tắt
 
 - **Trạng thái:** đang chạy production cho `runs-on: vn-gaqc-docker` từ 2026-10-22 khoảng 15:00 UTC. Đã chạy thật job `SonarQube-Scan` của repo `gg-ai-command-center-app`.
-- **Quy mô:** `minRunners: 0`, `maxRunners: 8`. Mỗi job chạy trong một pod riêng, xong job thì pod bị xoá.
+- **Quy mô:** `minRunners: 0`, `maxRunners: 18` (phương án A, 2026-10-22), mỗi pod request 1 CPU. Mỗi job chạy trong một pod riêng, xong job thì pod bị xoá. Giới hạn thật là CPU của host (mục 1.9).
 - **Tương thích với LXC cũ** (áp dụng và xác nhận ngày 2026-10-22): job chạy bằng root, `sudo` dùng được, có `docker compose`. Repo `gravity-jenkins-automation-screenshot-v2-10-2023` đã tự cài browser và load được site. Tuy nhiên, bước "Install browsers" mất khoảng **4 phút mỗi job**, vì image chưa có sẵn browser (xem TODO).
-- **Runner LXC cũ:** các container 111–135 đã xoá. Các container 100–110 đang **dừng nhưng chưa xoá**, để còn quay lại được (mục 2, TODO).
+- **Runner LXC cũ:** đã xoá hết (111–135 và 100–110) ngày 2026-10-22. Không còn đường quay lại hệ thống cũ.
 
 ```mermaid
 flowchart TB
@@ -66,11 +66,11 @@ flowchart TB
 | --- | --- | --- | --- | --- |
 | 9000 | `ubuntu-2404-k3s-tpl` | – | 2 / 2 GiB / 3,5 GB | Template cloud-init Ubuntu 24.04 (noble), tag `k3s` |
 | 201 | `k3s-server-1` | `192.168.8.2` | 2 / 4 GiB / 30 GB | k3s server (embedded etcd), có taint `CriticalAddonsOnly`; chạy ARC controller và listener |
-| 211 | `k3s-worker-1` | `192.168.8.3` | 8 / 16 GiB / 100 GB | k3s agent, label `gha-runner=true`, chạy runner pod |
-| 212 | `k3s-worker-2` | `192.168.8.4` | 8 / 16 GiB / 100 GB | Như worker-1 |
+| 211 | `k3s-worker-1` | `192.168.8.3` | 10 / 16 GiB / 100 GB | k3s agent, label `gha-runner=true`, chạy runner pod. Phương án A: nâng từ 8 lên 10 vCPU (đánh dấu xong ở mục 2 khi đã làm) |
+| 212 | `k3s-worker-2` | `192.168.8.4` | 10 / 16 GiB / 100 GB | Như worker-1 |
 | 220 | `registry-mirror` | `192.168.8.5` | 2 / 4 GiB / 50 GB | Docker + `registry:3`, cache Docker Hub |
 
-Chung cho mọi VM: `--balloon 0`, `--cpu host`, `virtio-scsi-single` + `iothread`, full clone trên `local-lvm2`, `--onboot 1`, `--startup order` (server = 1, còn lại = 2), gateway `192.168.8.1`, DNS `10.128.6.2 8.8.8.8`, user `ubuntu`. Mật khẩu console nằm trong password manager. Worker có allocatable khoảng 7 CPU và 13,1 GiB RAM, tối đa 110 pod.
+Chung cho mọi VM: `--balloon 0`, `--cpu host`, `virtio-scsi-single` + `iothread`, full clone trên `local-lvm2`, `--onboot 1`, `--startup order` (server = 1, còn lại = 2), gateway `192.168.8.1`, DNS `10.128.6.2 8.8.8.8`, user `ubuntu`. Mật khẩu console nằm trong password manager. Worker 10 vCPU có allocatable khoảng 9 CPU và 13,1 GiB RAM. Mỗi pod request 1 CPU, nên mỗi worker chứa được 9 runner.
 
 ### 1.4 Phần mềm và phiên bản
 
@@ -135,7 +135,7 @@ Không secret nào nằm trong repo. **Không** commit `k3s-plan.env` nếu có 
 
 | VMID | Tên | Trạng thái |
 | --- | --- | --- |
-| 100–110 | `github-runner-<id>-<ngày>` | **Dừng** từ 2026-10-22, chưa xoá. Có thể còn đăng ký Offline trên GitHub |
+| 100–110 | `github-runner-<id>-<ngày>` | Dừng lúc cài scale set, rồi đã xoá (`pct destroy --purge`) ngày 2026-10-22. Kiểm tra xem còn runner Offline trên GitHub không và xoá nếu có |
 | 111–135 | `github-runner-<id>-20261020MAY` | Đã xoá (`pct destroy --purge`) ngày 2026-10-22 |
 
 Các LXC này được tạo bởi script cũ, nằm trên branch `master` của repo: `lxc_create_github_actions_runner.master.sh` tạo LXC mẫu, `lxc_create_github_actions_runner.clone.sh` clone và đăng ký runner. Script cũ đã bị gỡ khỏi branch `v2` ở commit `facbe3d`. Đặc điểm của runner cũ:
@@ -147,14 +147,40 @@ Các LXC này được tạo bởi script cũ, nằm trên branch `master` của
 
 Image `ghcr.io/actions/actions-runner` của ARC không có các công cụ trên (riêng `docker compose` đã được bổ sung qua init container), mặc định chạy bằng user `runner` (cụm đã cấu hình chạy root như LXC cũ) và không có `NET_ADMIN`/`tun`. Workflow nào tự cài thứ mình cần (ví dụ job screenshot tự cài browser) thì chạy được ngay. Nếu nhiều workflow cần sẵn browser, Playwright, AWS CLI hay OpenVPN, dùng image tương đương LXC cũ ở [runner-image/Dockerfile](../runner-image/Dockerfile) (bản nháp, chưa build).
 
+### 1.9 CPU host và giới hạn số runner
+
+Đo ngày 2026-10-22 với `pvesh get /cluster/resources --type vm` khi có 7 job browser đang chạy:
+
+| VM | Thread thật đang dùng |
+| --- | --- |
+| `Maintain-Local` (205, 10 vCPU / 64 GiB) | khoảng 9,2, gần như luôn chạy hết công suất |
+| `Cullat`, `Cullat6`–`Cullat10` (254–259, mỗi VM 8 vCPU / 16 GiB) | khoảng 3 (cả 6 VM cộng lại) |
+| Cụm k3s, 7 job browser | khoảng 8,7, tức **khoảng 1,2 thread mỗi job browser** |
+
+Trong tổng 32 thread, cụm dùng được khoảng **18 thread** (32 − 12 cho các VM khác − 2 cho Proxmox/KVM). Từ đó suy ra:
+
+- Khoảng **15–18 job browser** chạy cùng lúc (screenshot, check-console: Chrome có giao diện + Xvfb trong `docker compose`).
+- Khoảng 50–60 job nhẹ (SonarQube, lint).
+- 70–100 job browser cùng lúc **không chạy được** trên host này: cần khoảng 84–120 thread. Thêm vCPU hay thêm VM worker chỉ chia nhỏ số thread hiện có, nên job chậm hơn mà tổng số job làm xong không tăng.
+
+Muốn chạy nhiều hơn thì có các hướng (mục 2, TODO):
+- thêm host Proxmox làm worker (cần IP LAN, vì `vmbr1` chỉ tồn tại trong host này),
+- dời `Maintain-Local` sang host khác,
+- đẩy phần vượt sang runner của GitHub qua input `runOnExternal` của workflow,
+- giảm CPU mỗi job (chạy `--headless`, dùng image có sẵn browser).
+
+RAM (còn trống khoảng 185 GiB) và disk (`local-lvm2` còn khoảng 2392 GB sau khi xoá LXC) đều không phải giới hạn.
+
 ---
 
 ## 2. Việc còn lại (TODO)
 
 - [ ] Theo dõi 1–2 ngày: job `vn-gaqc-docker` xanh, không có OOM hay evict, thời gian chờ runner hợp lý.
 - [ ] Chạy load test 16 job (mục 6.9) để xác nhận cụm scale lên 8, xếp hàng đúng và về lại 0.
-- [ ] Dọn LXC cũ: xoá các runner Offline trên GitHub, rồi `pct destroy` 100–110 (mục 7).
-- [ ] Chạy lại `pve-discovery.sh` sau khi dọn LXC, rồi tăng `maxRunners` (mục 3). Cần thêm sức chứa thì thêm worker bằng IP `.6`–`.9`.
+- [x] Đã xoá LXC cũ 100–135 (2026-10-22).
+- [ ] Xoá các runner `github-runner-*` còn Offline trên GitHub (Org → Settings → Actions → Runners).
+- [ ] Áp dụng phương án A: `resize-worker.sh` cho 211 và 212 (10 vCPU), rồi `helm upgrade` với `maxRunners: 18` và request 1 CPU/pod. Sau đó theo dõi CPU host.
+- [ ] Nếu cần nhiều hơn khoảng 18 job browser chạy cùng lúc: chọn giữa thêm host, dời `Maintain-Local`, `runOnExternal`, hoặc chạy headless (mục 1.9).
 - [ ] Báo người quản lý App `gravityactionvn` rằng ARC đang dùng key có fingerprint ở mục 1.5.
 - [ ] Cân nhắc tạo App riêng chỉ có quyền `Self-hosted runners` để giảm rủi ro ([github-app.md](github-app.md)).
 - [ ] Đặt lịch hằng tháng cập nhật runner image, và hằng năm đổi private key.
@@ -198,13 +224,6 @@ helm upgrade vn-gaqc-docker -n arc-runners -f ~/runner-values.yaml --version "${
   oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set
 ```
 
-**Quay lại runner LXC cũ** (chỉ làm được khi chưa xoá LXC và chưa xoá runner cũ trên GitHub):
-
-```bash
-helm uninstall vn-gaqc-docker -n arc-runners                                                        # k3s-server-1
-for id in $(pct list | awk '$NF ~ /^github-runner-/ { print $1 }'); do pct start "$id"; done        # Proxmox Shell
-```
-
 **Cập nhật runner image** (khoảng hằng tháng, bắt buộc: GitHub ngừng giao job cho runner quá cũ):
 
 ```bash
@@ -245,6 +264,16 @@ ssh ubuntu@192.168.8.2 'kubectl get nodes; kubectl get pods -n arc-systems'
 ssh ubuntu@192.168.8.5 'cd /opt/mirror && sudo docker compose ps'   # restart: unless-stopped
 ```
 
+**Đổi vCPU / RAM / disk của worker** (cordon, chờ hết job, reboot, rồi uncordon):
+
+```bash
+cd /root/selfhost-auto-scale
+bash resize-worker.sh 211 k3s-worker-1 10            # chỉ vCPU
+bash resize-worker.sh 212 k3s-worker-2 10 24 150     # vCPU, RAM (GiB), disk (GB, chỉ tăng)
+```
+
+Làm lần lượt từng worker. Sau đó chỉnh `maxRunners` cho khớp (mỗi worker chứa được khoảng `vCPU − 1` pod), và cập nhật mục 1.3.
+
 **Thêm worker:**
 
 1. Trong `/root/selfhost-auto-scale/k3s-plan.env`, đổi `WORKER_IDS="211 212 213"` và `WORKER_IPS="192.168.8.3 192.168.8.4 192.168.8.6"`.
@@ -266,7 +295,8 @@ Mỗi worker 8 vCPU / 16 GiB thêm khoảng 10–12 slot. Cập nhật mục 1.3
 | `vmbr1` (NAT qua host) | Không tốn IP LAN; cụm tách khỏi LAN vì dind chạy privileged | `vmbr0` (tốn IP LAN) |
 | IP tĩnh `192.168.8.2`–`.5` | `dhcpd` của host cấp `.10`–`.11.254`. Kế hoạch đầu tiên dùng `.201/.211/.212/.220` nằm trong dải DHCP nên đã đổi | IP trong dải DHCP |
 | Storage `local-lvm2` (thick) | `local-lvm` (thin) chỉ còn khoảng 40 GB | |
-| 2 worker 8 vCPU / 16 GiB, `maxRunners: 8` | CPU host đã bận 73–89%, RAM cấp phát đã gấp 3,6 lần RAM vật lý | 4 worker 16 vCPU / 32 GiB, 100 runner |
+| 2 worker 8 vCPU / 16 GiB, `maxRunners: 8` (lúc đầu) | CPU host đã bận 73–89%, RAM cấp phát đã gấp 3,6 lần RAM vật lý | 4 worker 16 vCPU / 32 GiB, 100 runner |
+| Phương án A: worker 10 vCPU, request 1 CPU/pod, `maxRunners: 18` | Job browser dùng khoảng 1,2 thread; cụm chỉ có khoảng 18 thread thật (mục 1.9). Request sát thực tế giúp scheduler không nhồi quá tải, job dư xếp hàng | `maxRunners` 70–100 với request 0,5 CPU: job chậm gấp 4–5 lần, dễ timeout, tổng thời gian chạy không giảm |
 | Scale set tên `vn-gaqc-docker` ngay từ đầu, dừng LXC trước khi cài | Workflow không phải sửa; không có lúc nào cả LXC lẫn scale set cùng nhận job | Chạy thử với tên tạm |
 | GitHub App có sẵn `gravityactionvn` + key riêng cho ARC | Có sẵn quyền `Self-hosted runners`; không hết hạn; thêm key không ảnh hưởng hệ thống khác | PAT (gắn với người, có hạn dùng); tạo App mới (có thể làm sau) |
 | Controller + listener chạy trên server | App có quyền rộng; job privileged trên worker không được đọc được key | Để Kubernetes tự xếp |
@@ -531,7 +561,7 @@ for ip in 192.168.8.3 192.168.8.4; do
 done
 ```
 
-**Scale set** (trên `k3s-server-1`). Nếu runner LXC cũ còn chạy, dừng chúng trước (mục 7):
+**Scale set** (trên `k3s-server-1`). Lần đầu cài, các runner LXC cũ đã được dừng trước (mục 7):
 
 ```bash
 helm template vn-gaqc-docker -n arc-runners -f ~/runner-values.yaml --version "${ARC_VERSION}" \
@@ -615,7 +645,7 @@ for id in $(pct list | awk '$NF ~ /^github-runner-/ && $2 == "running" { print $
 pct list | awk 'NR == 1 || $NF ~ /^github-runner-/'
 ```
 
-**Dọn** (TODO, sau 1–2 ngày chạy ổn). Thao tác này **không hoàn tác được**, và sau khi xoá thì không quay lại LXC được nữa.
+**Dọn** (đã làm ngày 2026-10-22). Thao tác này **không hoàn tác được**, và sau khi xoá thì không quay lại LXC được nữa.
 
 1. GitHub → Org → Settings → Actions → Runners: xoá các runner cũ đang Offline trong group `VN-Team`.
 2. Xoá LXC (Proxmox Shell):
