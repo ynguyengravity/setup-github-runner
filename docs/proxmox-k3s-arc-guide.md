@@ -79,7 +79,7 @@ Chung cho mọi VM: `--balloon 0`, `--cpu host`, `virtio-scsi-single` + `iothrea
 | OS của VM | Ubuntu 24.04.5 LTS, kernel 6.8.0-147 | Cloud image `noble-server-cloudimg-amd64.img` |
 | k3s | `v1.36.5+k3s1` (containerd 2.3.4) | Cài qua `get.k3s.io` với `INSTALL_K3S_VERSION`, flannel `host-gw`, đã tắt traefik và servicelb |
 | ARC (2 chart) | `0.15.0` | `gha-runner-scale-set-controller` + `gha-runner-scale-set` |
-| Runner image | `ghcr.io/actions/actions-runner:2.338.1` | Phải cập nhật khoảng hằng tháng (mục 3) |
+| Runner image | `192.168.8.5:5001/vn-gaqc-runner:2.338.1-202610230022` (build ngày 2026-10-23) | Image tự build từ `ghcr.io/actions/actions-runner:2.338.1`, có sẵn Chrome, Edge, Firefox, Node 24, Playwright, AWS CLI, OpenVPN, `docker compose`, sudo cho root ([runner-image/](../runner-image/)). Build lại khoảng hằng tháng bằng `build.sh` (mục 3) |
 | dind | `docker:dind` (Docker 29.9.2 lúc cài) | Chưa pin version |
 | `docker compose` trong runner | Plugin compose v5.x, lấy từ image `docker:dind` qua init container `init-compose-plugin` | Thêm ngày 2026-10-22: image runner chuẩn không có compose |
 | helm | v3.22.1 | Cài trên `k3s-server-1` |

@@ -2,7 +2,8 @@
 # Cài/nâng cấp (trên k3s-server-1):
 #   helm upgrade --install vn-gaqc-docker -n arc-runners -f runner-values.yaml \
 #     --version "$ARC_VERSION" oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set
-# Đổi runner version: sửa cả 2 dòng ghcr.io/actions/actions-runner:<version> rồi helm upgrade.
+# Image runner: vn-gaqc-runner tự build (runner-image/build.sh), nằm ở registry nội bộ 192.168.8.5:5001.
+# Đổi version: chạy build.sh rồi sửa cả 2 dòng image: thành tag nó in ra, sau đó helm upgrade.
 # Secret github-app (App gravityactionvn) và ConfigMap runner-sudoers (k8s/runner-sudoers.yaml)
 # phải có sẵn trong namespace arc-runners.
 githubConfigUrl: "https://github.com/Gravity-Global"
@@ -42,7 +43,7 @@ template:
             actions.github.com/scale-set-name: vn-gaqc-docker   # luôn trùng runnerScaleSetName
     initContainers:
       - name: init-dind-externals
-        image: ghcr.io/actions/actions-runner:2.338.1
+        image: 192.168.8.5:5001/vn-gaqc-runner:2.338.1-202610230022
         command: ["cp", "-r", "/home/runner/externals/.", "/home/runner/tmpDir/"]
         volumeMounts:
           - name: dind-externals
@@ -91,7 +92,7 @@ template:
             mountPath: /var/lib/docker
     containers:
       - name: runner
-        image: ghcr.io/actions/actions-runner:2.338.1
+        image: 192.168.8.5:5001/vn-gaqc-runner:2.338.1-202610230022
         imagePullPolicy: IfNotPresent
         command: ["/home/runner/run.sh"]
         # Chạy job bằng root như runner LXC cũ: nhiều workflow (vd. setup-browsers.sh của repo
