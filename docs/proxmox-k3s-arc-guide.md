@@ -66,7 +66,7 @@ flowchart TB
 | --- | --- | --- | --- | --- |
 | 9000 | `ubuntu-2404-k3s-tpl` | – | 2 / 2 GiB / 3,5 GB | Template cloud-init Ubuntu 24.04 (noble), tag `k3s` |
 | 201 | `k3s-server-1` | `192.168.8.2` | 2 / 4 GiB / 30 GB | k3s server (embedded etcd), có taint `CriticalAddonsOnly`; chạy ARC controller và listener |
-| 211 | `k3s-worker-1` | `192.168.8.3` | 10 / 16 GiB / 100 GB | k3s agent, label `gha-runner=true`, chạy runner pod. Phương án A: nâng từ 8 lên 10 vCPU (đánh dấu xong ở mục 2 khi đã làm) |
+| 211 | `k3s-worker-1` | `192.168.8.3` | 10 / 16 GiB / 100 GB | k3s agent, label `gha-runner=true`, chạy runner pod. Nâng từ 8 lên 10 vCPU ngày 2026-10-22 (phương án A) |
 | 212 | `k3s-worker-2` | `192.168.8.4` | 10 / 16 GiB / 100 GB | Như worker-1 |
 | 220 | `registry-mirror` | `192.168.8.5` | 2 / 4 GiB / 50 GB | Docker + `registry:3`, cache Docker Hub |
 
@@ -179,7 +179,8 @@ RAM (còn trống khoảng 185 GiB) và disk (`local-lvm2` còn khoảng 2392 GB
 - [ ] Chạy load test 16 job (mục 6.9) để xác nhận cụm scale lên 8, xếp hàng đúng và về lại 0.
 - [x] Đã xoá LXC cũ 100–135 (2026-10-22).
 - [ ] Xoá các runner `github-runner-*` còn Offline trên GitHub (Org → Settings → Actions → Runners).
-- [ ] Áp dụng phương án A: `resize-worker.sh` cho 211 và 212 (10 vCPU), rồi `helm upgrade` với `maxRunners: 18` và request 1 CPU/pod. Sau đó theo dõi CPU host.
+- [x] Phương án A (2026-10-22): 211 và 212 lên 10 vCPU (allocatable 9 CPU), `maxRunners: 18`, request 1 CPU/pod (Helm revision 5).
+- [ ] Theo dõi CPU host khi chạy đủ 18 job. Nếu host thường xuyên trên 90%, giảm `maxRunners` xuống 14–16.
 - [ ] Nếu cần nhiều hơn khoảng 18 job browser chạy cùng lúc: chọn giữa thêm host, dời `Maintain-Local`, `runOnExternal`, hoặc chạy headless (mục 1.9).
 - [ ] Báo người quản lý App `gravityactionvn` rằng ARC đang dùng key có fingerprint ở mục 1.5.
 - [ ] Cân nhắc tạo App riêng chỉ có quyền `Self-hosted runners` để giảm rủi ro ([github-app.md](github-app.md)).
@@ -326,6 +327,7 @@ Request/limit của mỗi runner pod: runner 250m CPU / 512Mi (limit 2Gi), dind 
 | Job `check-console` lỗi `unknown flag: --rm` ở bước `docker compose run --rm ...` | Image runner chuẩn của ARC chỉ có `docker` + buildx, không có plugin compose (LXC cũ có, vì cài Docker bằng `get.docker.com`) | Thêm init container `init-compose-plugin` copy `docker-compose` từ `docker:dind` vào `/usr/local/libexec/docker/cli-plugins` của container runner ([k8s/runner-values.yaml](../k8s/runner-values.yaml)) |
 | Job `screenshot` lỗi `Initialize Browser: Server terminated early with status 127` | `.github/scripts/setup-browsers.sh` của repo gọi `apt-key`/`apt` không có `sudo` → `E: This command can only be used by root`, Chrome không được cài (bước vẫn xanh vì `\|\| true`), chromedriver thoát 127 | Container runner chạy bằng root như LXC cũ: `runAsUser: 0` + `RUNNER_ALLOW_RUNASROOT=1` ([k8s/runner-values.yaml](../k8s/runner-values.yaml)). Lâu dài: image có sẵn browser để khỏi cài lại mỗi job |
 | Sau khi chạy root, action `setup-hosts` lỗi `root is not in the sudoers file` | Image `actions-runner` ghi đè `/etc/sudoers` chỉ còn dòng `%sudo`, mất dòng `root` | ConfigMap `runner-sudoers` ([k8s/runner-sudoers.yaml](../k8s/runner-sudoers.yaml)) mount vào `/etc/sudoers` của container runner (subPath, mode 0440) |
+| `resize-worker.sh` báo xong nhưng allocatable vẫn cũ; bản sau thì kẹt ở "Chờ ... Ready" | Bản 1: chờ Ready quá sớm, đọc phải trạng thái cũ. Bản 2: tham số jsonpath có `( )` và `"` bị shell trên server phân tích sai khi chạy `kubectl` qua SSH | Chờ bootID của node thay đổi rồi kiểm tra `nproc`; quote từng tham số bằng `printf %q` trước khi gửi qua SSH. Nếu bị kẹt giữa chừng, node còn cordon: `kubectl uncordon <node>` |
 | Dán HTML nguồn của trang GitHub để lấy thông tin | | Không dán HTML nguồn (có giá trị gắn với phiên đăng nhập). Chụp màn hình hoặc copy chữ |
 
 ---

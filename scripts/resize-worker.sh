@@ -20,7 +20,9 @@ WAIT_JOBS_SEC=${WAIT_JOBS_SEC:-7200}     # chờ job trên node xong tối đa b
 WAIT_READY_SEC=${WAIT_READY_SEC:-600}
 
 die() { echo "[FAIL] $*" >&2; exit 1; }
-k()   { ssh -o BatchMode=yes "$SERVER" "kubectl $*"; }
+# Quote từng tham số (printf %q) vì shell phía server phân tích lại chuỗi lệnh;
+# thiếu bước này thì jsonpath có ( ) và " sẽ hỏng
+k()   { ssh -o BatchMode=yes "$SERVER" "kubectl $(printf '%q ' "$@")"; }
 
 [[ -n $VMID && -n $NODE && ( -n $CORES || -n $MEM_GB || -n $DISK_GB ) ]] \
   || die "Cách dùng: bash resize-worker.sh <vmid> <node-name> [cores] [mem_gb] [disk_gb]"
