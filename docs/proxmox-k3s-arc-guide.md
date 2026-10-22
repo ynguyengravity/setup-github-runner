@@ -116,7 +116,8 @@ Chung cho mọi VM: `--balloon 0`, `--cpu host`, `virtio-scsi-single` + `iothrea
 | `k3s-server-1` | `~/controller-values.yaml`, `~/runner-values.yaml` | Values đang cài. Bản sao trong repo: [k8s/](../k8s/) |
 | `k3s-server-1` | `~/.kube/config`, `~/.bashrc` (`KUBECONFIG`, `ARC_VERSION`, `RUNNER_VERSION`), `/etc/environment` (`KUBECONFIG`) | Để `kubectl`/`helm` chạy được, cả khi chạy qua SSH một dòng |
 | `k3s-server-1` | `/var/lib/rancher/k3s/server/db/snapshots` | Snapshot etcd tự động 12 giờ/lần, giữ 10 bản |
-| `registry-mirror` | `/opt/mirror/config.yml`, `/opt/mirror/compose.yaml`, `/srv/registry` | Config mirror và cache. Bản sao trong repo: [mirror/](../mirror/) |
+| `registry-mirror` | `/opt/mirror/config.yml`, `/opt/mirror/compose.yaml`, `/srv/registry` | Config mirror và cache Docker Hub (cổng 5000). Bản sao trong repo: [mirror/](../mirror/) |
+| `registry-mirror` | `/srv/registry-local`, `~/runner-image/Dockerfile` | Registry nội bộ (cổng 5001) chứa image tự build `vn-gaqc-runner`; thư mục build |
 | Cụm | Secret `github-app` (namespace `arc-runners`) | `github_app_id`, `github_app_installation_id`, `github_app_private_key` |
 | Cụm | ConfigMap `runner-sudoers` (namespace `arc-runners`) | `/etc/sudoers` cho container runner ([k8s/runner-sudoers.yaml](../k8s/runner-sudoers.yaml)) |
 
@@ -185,7 +186,8 @@ RAM (còn trống khoảng 185 GiB) và disk (`local-lvm2` còn khoảng 2392 GB
 - [ ] Báo người quản lý App `gravityactionvn` rằng ARC đang dùng key có fingerprint ở mục 1.5.
 - [ ] Cân nhắc tạo App riêng chỉ có quyền `Self-hosted runners` để giảm rủi ro ([github-app.md](github-app.md)).
 - [ ] Đặt lịch hằng tháng cập nhật runner image, và hằng năm đổi private key.
-- [ ] Build image runner có sẵn browser, Node, Playwright, AWS CLI và dòng `root` trong sudoers ([runner-image/Dockerfile](../runner-image/Dockerfile)), để bỏ khoảng 4 phút cài browser ở mỗi job (run screenshot có khoảng 100 job). Build xong thì bỏ được ConfigMap `runner-sudoers` và init container compose.
+- [ ] Build image `vn-gaqc-runner` (có sẵn browser, Node, Playwright, AWS CLI, `docker compose`, dòng `root` trong sudoers) bằng [runner-image/build.sh](../runner-image/build.sh). Image chỉ nằm ở registry nội bộ `192.168.8.5:5001`, không đưa lên ghcr. Mục tiêu: bỏ khoảng 6 phút cài browser ở mỗi job (run screenshot: khoảng 8 phút/job, 73 job, `max-parallel: 10`). Chạy ổn rồi thì bỏ ConfigMap `runner-sudoers` và init container compose.
+- [ ] (Repo screenshot) Cân nhắc tăng `max-parallel` từ 10 lên 16–18 để dùng hết sức chứa của cụm.
 - [ ] (Tuỳ chọn) Pin `docker:dind` theo major, gắn monitoring (Prometheus) và cảnh báo.
 
 ---
@@ -240,6 +242,15 @@ sed -i "s/^export RUNNER_VERSION=.*/export RUNNER_VERSION=${NEW}/" ~/.bashrc
 ```
 
 Cập nhật luôn bảng phiên bản ở mục 1.4 và file [k8s/runner-values.yaml](../k8s/runner-values.yaml).
+
+**Build image runner nội bộ `vn-gaqc-runner`** (Proxmox Shell; build trên VM mirror, push vào `192.168.8.5:5001`, kéo sẵn về worker):
+
+```bash
+cd /root/selfhost-auto-scale/runner-image          # có Dockerfile + build.sh
+bash build.sh                                       # hoặc: bash build.sh <runner-version>
+```
+
+Script in ra tag mới (`<runner-version>-<thời gian>`) kèm lệnh `sed` để sửa 2 dòng `image:` trong `~/runner-values.yaml`, rồi `helm upgrade`. Mỗi lần build có tag riêng, vì vậy node không dùng nhầm bản cũ đã cache. Registry không tự xoá tag cũ. Khi disk của VM mirror (50 GB) gần đầy, xoá tag cũ rồi chạy `sudo docker compose exec registry-local registry garbage-collect /etc/distribution/config.yml`.
 
 **Đổi private key GitHub App:** làm theo [github-app.md, mục "Đổi private key"](github-app.md#đổi-private-key-khuyến-nghị-1-lần-mỗi-năm-hoặc-ngay-khi-nghi-key-bị-lộ). Nhớ cập nhật fingerprint ở mục 1.5.
 
@@ -496,12 +507,7 @@ curl -fsSL "$BASE/mirror/compose.yaml" | ssh ubuntu@192.168.8.5 'sudo tee /opt/m
 ssh ubuntu@192.168.8.5 'cd /opt/mirror && sudo docker compose up -d && sudo docker compose ps'
 
 for ip in 192.168.8.2 192.168.8.3 192.168.8.4; do
-  ssh ubuntu@$ip "sudo tee /etc/rancher/k3s/registries.yaml >/dev/null" <<'EOF'
-mirrors:
-  docker.io:
-    endpoint:
-      - "http://192.168.8.5:5000"
-EOF
+  curl -fsSL "$BASE/k8s/registries.yaml" | ssh ubuntu@$ip "sudo tee /etc/rancher/k3s/registries.yaml >/dev/null"
 done
 ssh ubuntu@192.168.8.2 'sudo systemctl restart k3s'
 for ip in 192.168.8.3 192.168.8.4; do ssh ubuntu@$ip 'sudo systemctl restart k3s-agent'; done
@@ -510,7 +516,7 @@ ssh ubuntu@192.168.8.3 'sudo k3s crictl pull docker.io/library/alpine:3.20'
 curl -s http://192.168.8.5:5000/v2/_catalog          # {"repositories":["library/alpine"]}
 ```
 
-Biến `$BASE` lấy từ mục 6.1. Mirror chạy ẩn danh. Cách thêm tài khoản Docker Hub được ghi ở đầu file [mirror/config.yml](../mirror/config.yml). Nếu mirror chết, containerd và dockerd tự kéo thẳng từ Docker Hub. Không NAT hay port-forward port 5000 ra ngoài `vmbr1`.
+Biến `$BASE` lấy từ mục 6.1. [k8s/registries.yaml](../k8s/registries.yaml) khai báo 2 registry trên VM mirror: `docker.io` đi qua cache ở cổng 5000, và registry nội bộ `192.168.8.5:5001` (http) cho image tự build. Mirror chạy ẩn danh. Cách thêm tài khoản Docker Hub được ghi ở đầu file [mirror/config.yml](../mirror/config.yml). Nếu mirror chết, containerd và dockerd tự kéo thẳng từ Docker Hub. Không NAT hay port-forward port 5000 ra ngoài `vmbr1`.
 
 ### 6.8 GitHub App, ARC controller và scale set
 

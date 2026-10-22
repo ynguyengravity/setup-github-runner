@@ -1,0 +1,11 @@
+# /etc/rancher/k3s/registries.yaml trên MỌI node k3s (server + worker). Đổi xong phải restart
+# k3s (server) / k3s-agent (worker). Cả hai registry đều nằm trên VM registry-mirror.
+mirrors:
+  # Docker Hub đi qua pull-through cache
+  docker.io:
+    endpoint:
+      - "http://192.168.8.5:5000"
+  # Registry nội bộ chứa image tự build (vn-gaqc-runner); khai báo endpoint http để containerd không dùng https
+  "192.168.8.5:5001":
+    endpoint:
+      - "http://192.168.8.5:5001"

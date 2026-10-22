@@ -67,9 +67,14 @@ RUN curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o /tmp/
  && ln -sf /usr/local/bin/aws /usr/bin/aws \
  && rm -rf /tmp/aws /tmp/awscliv2.zip
 
+# Job chạy bằng root (như LXC cũ) nhưng image gốc ghi đè /etc/sudoers chỉ còn %sudo:
+# thêm lại dòng root để action gọi `sudo ...` vẫn chạy
+RUN echo 'root ALL=(ALL:ALL) NOPASSWD:ALL' >> /etc/sudoers && visudo -c
+
 # Kiểm tra nhanh lúc build: thiếu công cụ nào thì build lỗi ngay
 RUN google-chrome --version && microsoft-edge --version && firefox --version \
  && node --version && npm --version && npx playwright --version \
- && openvpn --version | head -1 && docker compose version && aws --version
+ && openvpn --version | head -1 && docker compose version && aws --version \
+ && sudo -n true
 
 USER runner

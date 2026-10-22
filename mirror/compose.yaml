@@ -8,3 +8,15 @@ services:
     volumes:
       - ./config.yml:/etc/distribution/config.yml:ro
       - /srv/registry:/var/lib/registry
+
+  # Registry nội bộ (không proxy) chứa image tự build, ví dụ vn-gaqc-runner. Push từ chính VM này
+  # qua localhost:5001; các node k3s kéo qua http://192.168.8.5:5001 (k8s/registries.yaml).
+  registry-local:
+    image: registry:3
+    restart: unless-stopped
+    ports:
+      - "5001:5000"
+    environment:
+      REGISTRY_STORAGE_DELETE_ENABLED: "true"
+    volumes:
+      - /srv/registry-local:/var/lib/registry
