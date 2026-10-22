@@ -117,6 +117,7 @@ Chung cho mọi VM: `--balloon 0`, `--cpu host`, `virtio-scsi-single` + `iothrea
 | `k3s-server-1` | `/var/lib/rancher/k3s/server/db/snapshots` | Snapshot etcd tự động 12 giờ/lần, giữ 10 bản |
 | `registry-mirror` | `/opt/mirror/config.yml`, `/opt/mirror/compose.yaml`, `/srv/registry` | Config mirror và cache. Bản sao trong repo: [mirror/](../mirror/) |
 | Cụm | Secret `github-app` (namespace `arc-runners`) | `github_app_id`, `github_app_installation_id`, `github_app_private_key` |
+| Cụm | ConfigMap `runner-sudoers` (namespace `arc-runners`) | `/etc/sudoers` cho container runner ([k8s/runner-sudoers.yaml](../k8s/runner-sudoers.yaml)) |
 
 ### 1.7 Secrets
 
@@ -292,6 +293,7 @@ Request/limit của mỗi runner pod: runner 250m CPU / 512Mi (limit 2Gi), dind 
 | Log dind có `Failed to find nft tool` | Docker 29 dò `nftables` trước, không có thì dùng iptables | Vô hại |
 | Job `check-console` lỗi `unknown flag: --rm` ở bước `docker compose run --rm ...` | Image runner chuẩn của ARC chỉ có `docker` + buildx, không có plugin compose (LXC cũ có, vì cài Docker bằng `get.docker.com`) | Thêm init container `init-compose-plugin` copy `docker-compose` từ `docker:dind` vào `/usr/local/libexec/docker/cli-plugins` của container runner ([k8s/runner-values.yaml](../k8s/runner-values.yaml)) |
 | Job `screenshot` lỗi `Initialize Browser: Server terminated early with status 127` | `.github/scripts/setup-browsers.sh` của repo gọi `apt-key`/`apt` không có `sudo` → `E: This command can only be used by root`, Chrome không được cài (bước vẫn xanh vì `\|\| true`), chromedriver thoát 127 | Container runner chạy bằng root như LXC cũ: `runAsUser: 0` + `RUNNER_ALLOW_RUNASROOT=1` ([k8s/runner-values.yaml](../k8s/runner-values.yaml)). Lâu dài: image có sẵn browser để khỏi cài lại mỗi job |
+| Sau khi chạy root, action `setup-hosts` lỗi `root is not in the sudoers file` | Image `actions-runner` ghi đè `/etc/sudoers` chỉ còn dòng `%sudo`, mất dòng `root` | ConfigMap `runner-sudoers` ([k8s/runner-sudoers.yaml](../k8s/runner-sudoers.yaml)) mount vào `/etc/sudoers` của container runner (subPath, mode 0440) |
 | Dán HTML nguồn của trang GitHub để lấy thông tin | | Không dán HTML nguồn (có giá trị gắn với phiên đăng nhập). Chụp màn hình hoặc copy chữ |
 
 ---
@@ -513,6 +515,12 @@ kubectl get pods -n arc-systems -o wide            # Running trên k3s-server-1
 kubectl get crd | grep actions.github.com          # 4 CRD
 ```
 
+**ConfigMap sudoers** (trên `k3s-server-1`, phải có trước khi cài scale set):
+
+```bash
+curl -fsSL "$BASE/k8s/runner-sudoers.yaml" | kubectl apply -f -
+```
+
 **Kéo sẵn image runner** (Proxmox Shell). Dùng đúng version trong `runner-values.yaml`:
 
 ```bash
@@ -546,6 +554,7 @@ Cách hoạt động của các phần trong `runner-values.yaml`:
 | `RUNNER_WAIT_FOR_DOCKER_IN_SECONDS` | Runner chờ dockerd sẵn sàng rồi mới nhận job |
 | `init-compose-plugin` + volume `docker-plugins` | Có `docker compose` trong job; plugin lấy từ image `docker:dind` đã có sẵn trên node |
 | `runAsUser: 0` + `RUNNER_ALLOW_RUNASROOT=1` | Job chạy bằng root như LXC cũ (script gọi `apt` không `sudo` vẫn chạy). Container runner vẫn không privileged; chỉ dind privileged |
+| Volume `sudoers` (ConfigMap `runner-sudoers`) | `/etc/sudoers` có dòng `root`, để các action gọi `sudo` vẫn chạy khi job chạy bằng root |
 | `listenerTemplate` / `nodeSelector` của controller | Credential GitHub không nằm trên worker |
 | `topologySpreadConstraints` | Rải runner đều giữa các worker |
 

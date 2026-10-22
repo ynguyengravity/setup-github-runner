@@ -1,0 +1,15 @@
+# /etc/sudoers cho container runner (mount bằng subPath trong runner-values.yaml).
+# Image ghcr.io/actions/actions-runner ghi đè /etc/sudoers chỉ còn dòng %sudo, nên khi job
+# chạy bằng root thì `sudo ...` báo "root is not in the sudoers file". File này thêm lại root.
+# Áp dụng (trên k3s-server-1), TRƯỚC helm upgrade scale set:
+#   kubectl apply -f runner-sudoers.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: runner-sudoers
+  namespace: arc-runners
+data:
+  sudoers: |
+    Defaults env_keep += "DEBIAN_FRONTEND"
+    root  ALL=(ALL:ALL) NOPASSWD:ALL
+    %sudo ALL=(ALL:ALL) NOPASSWD:ALL

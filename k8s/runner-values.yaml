@@ -3,7 +3,8 @@
 #   helm upgrade --install vn-gaqc-docker -n arc-runners -f runner-values.yaml \
 #     --version "$ARC_VERSION" oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set
 # Đổi runner version: sửa cả 2 dòng ghcr.io/actions/actions-runner:<version> rồi helm upgrade.
-# Secret github-app (App gravityactionvn) phải có sẵn trong namespace arc-runners.
+# Secret github-app (App gravityactionvn) và ConfigMap runner-sudoers (k8s/runner-sudoers.yaml)
+# phải có sẵn trong namespace arc-runners.
 githubConfigUrl: "https://github.com/Gravity-Global"
 githubConfigSecret: github-app
 
@@ -114,6 +115,11 @@ template:
           - name: docker-plugins
             mountPath: /usr/local/libexec/docker/cli-plugins
             readOnly: true
+          # sudoers có dòng root (image gốc bỏ mất) để `sudo` chạy được khi job chạy bằng root
+          - name: sudoers
+            mountPath: /etc/sudoers
+            subPath: sudoers
+            readOnly: true
     volumes:
       - name: work
         emptyDir: { sizeLimit: 10Gi }
@@ -125,3 +131,7 @@ template:
         emptyDir: { sizeLimit: 20Gi }
       - name: docker-plugins
         emptyDir: {}
+      - name: sudoers
+        configMap:
+          name: runner-sudoers          # k8s/runner-sudoers.yaml
+          defaultMode: 288               # = 0440 (sudo bắt buộc quyền này)
