@@ -1,0 +1,18 @@
+# Pull-through cache Docker Hub, chạy trên VM registry-mirror (192.168.8.5), file /opt/mirror/config.yml.
+# Đang chạy ẩn danh (không có tài khoản Docker Hub). Gặp `toomanyrequests` thì thêm vào khối proxy:
+#     username: "<dockerhub-user>"
+#     password: "<dockerhub-token>"
+# rồi `cd /opt/mirror && sudo docker compose restart`. KHÔNG commit bản có token vào repo.
+version: 0.1
+log:
+  level: info
+storage:
+  filesystem:
+    rootdirectory: /var/lib/registry
+  delete:
+    enabled: true
+http:
+  addr: :5000
+proxy:
+  remoteurl: https://registry-1.docker.io
+  ttl: 168h

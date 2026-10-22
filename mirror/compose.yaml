@@ -1,0 +1,10 @@
+# VM registry-mirror (192.168.8.5), file /opt/mirror/compose.yaml. Dữ liệu cache ở /srv/registry.
+services:
+  registry:
+    image: registry:3
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./config.yml:/etc/distribution/config.yml:ro
+      - /srv/registry:/var/lib/registry

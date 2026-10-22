@@ -1,102 +1,328 @@
 # Self-hosted GitHub Runner autoscale trên Proxmox với k3s + ARC
 
-Oct 22, 2026 · @Y Nguyen
+Cập nhật lần cuối: 2026-10-22 · @Y Nguyen
 
-Guide này dành cho host Proxmox `GG-Nha-VM-GA` (đơn node, PVE 9.2) và các workflow đang chạy `runs-on: vn-gaqc-docker`. Mọi giá trị cụ thể nằm trong [`scripts/k3s-plan.env.example`](../scripts/k3s-plan.env.example). Nếu dùng cho host khác: sửa file đó, chạy lại [`scripts/pve-discovery.sh`](../scripts/pve-discovery.sh), rồi thay các giá trị tương ứng trong lệnh.
+Tài liệu này có hai phần. Phần đầu là **hồ sơ hiện trạng**: hệ thống đang chạy thế nào, mọi giá trị cụ thể nằm ở đâu, các quyết định đã chốt và các sự cố đã gặp. Phần sau là **hướng dẫn vận hành và dựng lại** từ đầu. Đọc mục 1–5 là đủ để nắm toàn bộ bối cảnh mà không cần lục lại lịch sử chat.
 
-## Tổng quan
+Tài liệu liên quan:
 
-Cụm k3s gồm 1 server và 2 worker VM, chạy Actions Runner Controller (ARC). Mỗi job GitHub chạy trong một pod riêng. Pod được tạo khi có job và xoá ngay khi job xong, nên số pod tự scale từ 0 lên `maxRunners`. Lúc đầu đặt `maxRunners: 8`, vì CPU host đang bận 73–89%. Sau khi gỡ các runner LXC cũ thì tăng dần, mục tiêu là 100.
+- [docs/github-app.md](github-app.md): GitHub App `gravityactionvn`, private key, đổi key và các lỗi xác thực.
+- [scripts/](../scripts/): `pve-discovery.sh` (kiểm tra host), `pve-create-vms.sh` (tạo VM), `node-prep.sh` (chuẩn bị OS), `k3s-plan.env.example` (kế hoạch).
+- [k8s/](../k8s/): `controller-values.yaml` và `runner-values.yaml`, đúng bản đang cài.
+- [mirror/](../mirror/): `config.yml` và `compose.yaml` của registry mirror, đúng bản đang chạy.
+
+---
+
+## 1. Hiện trạng
+
+### 1.1 Tóm tắt
+
+- **Trạng thái:** đang chạy production cho `runs-on: vn-gaqc-docker` từ 2026-10-22 khoảng 15:00 UTC. Đã chạy thật job `SonarQube-Scan` của repo `gg-ai-command-center-app`.
+- **Quy mô:** `minRunners: 0`, `maxRunners: 8`. Mỗi job chạy trong một pod riêng, xong job thì pod bị xoá.
+- **Runner LXC cũ:** các container 111–135 đã xoá. Các container 100–110 đang **dừng nhưng chưa xoá**, để còn quay lại được (mục 2, TODO).
 
 ```mermaid
 flowchart TB
-    GH["GitHub<br/>hàng đợi job · runs-on: vn-gaqc-docker"]
-    DH["Docker Hub"]
-    subgraph PVE["Proxmox host GG-Nha-VM-GA · vmbr1 192.168.8.0/22, NAT ra vmbr0"]
-        subgraph K3S["Cụm k3s"]
-            ARC["ARC (arc-systems)<br/>listener + controller"]
-            SRV["k3s-server-1 · 192.168.8.2<br/>control plane + etcd"]
-            W1["k3s-worker-1 · 192.168.8.3<br/>runner pod"]
-            W2["k3s-worker-2 · 192.168.8.4<br/>runner pod"]
+    GH["GitHub · org Gravity-Global<br/>runs-on: vn-gaqc-docker · group VN-Team"]
+    DH["Docker Hub (ẩn danh)"]
+    subgraph PVE["Proxmox GG-Nha-VM-GA · LAN 10.128.6.102 · vmbr1 192.168.8.0/22 NAT ra vmbr0"]
+        subgraph K3S["Cụm k3s v1.36.5"]
+            SRV["k3s-server-1 · 192.168.8.2 · VMID 201<br/>control plane + etcd<br/>ARC controller + listener"]
+            W1["k3s-worker-1 · 192.168.8.3 · VMID 211<br/>runner pod (runner + dind)"]
+            W2["k3s-worker-2 · 192.168.8.4 · VMID 212<br/>runner pod (runner + dind)"]
         end
-        MIR["registry-mirror · 192.168.8.5<br/>cache Docker Hub :5000"]
+        MIR["registry-mirror · 192.168.8.5 · VMID 220<br/>registry:3 :5000"]
     end
-    ARC -- "long-poll HTTPS, chỉ outbound" --> GH
-    ARC -- "tạo / xoá pod" --> W1 & W2
+    SRV -- "long-poll HTTPS (GitHub App gravityactionvn)" --> GH
+    SRV -- "tạo / xoá pod" --> W1 & W2
+    W1 & W2 -- "chạy job, báo kết quả" --> GH
     W1 & W2 -- "docker pull" --> MIR
     MIR -- "lần đầu" --> DH
 ```
 
-Luồng một job:
-
-1. Job có `runs-on: vn-gaqc-docker` vào hàng đợi trên GitHub.
-2. Listener của ARC long-poll GitHub (chỉ cần HTTPS outbound, không webhook, không mở port) và thấy có job.
-3. Controller tạo 1 pod (runner + Docker riêng) với JIT config. Pod này chỉ nhận đúng 1 job.
-4. Job xong thì pod bị xoá. Hết job thì còn 0 pod.
+### 1.2 Proxmox host
 
 | Mục | Giá trị |
 | --- | --- |
-| Mạng | `vmbr1` `192.168.8.0/22`, gateway và NAT là chính host (`192.168.8.1`) |
-| DHCP trên vmbr1 | `dhcpd` của host cấp `192.168.8.10`–`192.168.11.254`, nên IP tĩnh của cụm dùng `.2`–`.9` |
-| k3s server | `k3s-server-1`, VMID 201, `192.168.8.2`, 2 vCPU / 4 GiB / 30 GB |
-| k3s worker | `k3s-worker-1..2`, VMID 211–212, `192.168.8.3`–`.4`, 8 vCPU / 16 GiB / 100 GB |
-| Registry mirror | `registry-mirror`, VMID 220, `192.168.8.5`, 2 vCPU / 4 GiB / 50 GB |
-| IP dự phòng | `192.168.8.6`–`.9` (thêm worker, server HA) |
-| Template, storage | VMID 9000 `ubuntu-2404-k3s-tpl`, `local-lvm2` (LVM thick) |
-| Scale set (= `runs-on`) | `vn-gaqc-docker`, trùng label của runner LXC cũ nên workflow không phải sửa |
-| Nơi chạy lệnh | `qm`, `pct`, `ssh`: **Proxmox Shell** trên web UI. `kubectl`, `helm`: trên **`k3s-server-1`** (`ssh ubuntu@192.168.8.2`) |
+| Tên | `GG-Nha-VM-GA`, đơn node (không cluster) |
+| Phiên bản | PVE 9.2.21, kernel 7.0.14-12-pve |
+| CPU / RAM | Intel Xeon Silver 4109T, 32 thread / 376,5 GiB |
+| Tải CPU (2026-10-22) | Bận 73–89% khi còn chạy các LXC runner cũ. Phần lớn đến từ 11 LXC 100–110 và các VM khác |
+| Ổ đĩa | `sda`, `sdb` 893,8 GB và `sdc` 3,5 TB (PERC H740P, SSD) |
+| Storage | `local-lvm` (LVM-thin, còn khoảng 40 GB), `local-lvm2` (LVM thick, còn khoảng 1762 GB sau khi xoá LXC). **Cụm dùng `local-lvm2`** |
+| Storage `local` | `/var/lib/vz`, đã bật content **Snippets** |
+| `vmbr0` | LAN `10.128.6.102/24`, gateway `10.128.6.1`, chạy trên `bond0` (LACP `ens1f0np0` + `ens1f1np1`) |
+| `vmbr1` | `192.168.8.1/22`, không gắn card vật lý, NAT ra `vmbr0` (MASQUERADE) |
+| DHCP trên `vmbr1` | `dhcpd` (ISC) chạy trên host, cấp `192.168.8.10`–`192.168.11.254`, DNS `10.128.6.2`, `8.8.8.8` (file `/etc/dhcp/dhcpd.conf`) |
+| IP tĩnh còn trống ngoài dải DHCP | `192.168.8.6`–`.9` (cụm đang dùng `.2`–`.5`) |
+| MTU đường ra Internet | Khoảng 1480, đã có **MSS clamp 1440** cho `192.168.8.0/22` (mục 6.2) |
+| Backup job | Chưa có. Khi tạo, nhớ exclude 211, 212, 220 |
+| SSH key quản trị | `/root/.ssh/id_ed25519` (tạo ngày 2026-10-22, comment `proxmox-k3s-admin`). Public key đã được cài vào user `ubuntu` của mọi VM |
 
-## Vì sao runner cũ chết giữa chừng và cụm mới tránh thế nào
+### 1.3 VM của cụm
 
-| Nguyên nhân thường gặp | Cách cụm mới xử lý |
-| --- | --- |
-| Hết RAM (container hoặc cả host), kernel kill process | Mỗi pod có request/limit RAM; kubelet giữ RAM dự phòng và có ngưỡng eviction; VM tắt balloon |
-| Nhiều job dùng chung `docker.sock` của host: `docker system prune`, `docker rm -f` hoặc trùng tên làm chết job khác | Mỗi pod có Docker daemon riêng (dind sidecar) |
-| Disk đầy do runner dùng lại, rác tích luỹ | Pod dùng một lần rồi xoá; `emptyDir` có `sizeLimit`; kubelet tự dọn image |
-| Runner tự update, container restart; registration token hết hạn; trùng tên runner | Pin version runner image; dùng JIT config một lần, tên runner do ARC sinh |
-| Script scale-down hoặc `restart: always` kill container đang chạy job | ARC không bao giờ xoá runner đang bận |
-| Host reboot tự động, backup làm VM đứng | Tắt auto-reboot (bước 2); worker không nằm trong backup |
-| Thiếu `inotify`/`nofile`, MTU sai | Tăng sysctl (bước 2); MSS clamp trên host (phần Mạng) |
-
-## Sizing
-
-| VM | Số lượng | vCPU | RAM | Disk |
+| VMID | Tên | IP | vCPU / RAM / Disk | Vai trò |
 | --- | --- | --- | --- | --- |
-| `k3s-server-1` | 1 | 2 | 4 GiB | 30 GB |
-| `k3s-worker` | 2 | 8 | 16 GiB | 100 GB |
-| `registry-mirror` | 1 | 2 | 4 GiB | 50 GB |
-| **Tổng** | **4** | **20** | **40 GiB** | **280 GB** (`local-lvm2` còn 348 GB) |
+| 9000 | `ubuntu-2404-k3s-tpl` | – | 2 / 2 GiB / 3,5 GB | Template cloud-init Ubuntu 24.04 (noble), tag `k3s` |
+| 201 | `k3s-server-1` | `192.168.8.2` | 2 / 4 GiB / 30 GB | k3s server (embedded etcd), có taint `CriticalAddonsOnly`; chạy ARC controller và listener |
+| 211 | `k3s-worker-1` | `192.168.8.3` | 8 / 16 GiB / 100 GB | k3s agent, label `gha-runner=true`, chạy runner pod |
+| 212 | `k3s-worker-2` | `192.168.8.4` | 8 / 16 GiB / 100 GB | Như worker-1 |
+| 220 | `registry-mirror` | `192.168.8.5` | 2 / 4 GiB / 50 GB | Docker + `registry:3`, cache Docker Hub |
 
-Request/limit của mỗi runner pod:
+Chung cho mọi VM: `--balloon 0`, `--cpu host`, `virtio-scsi-single` + `iothread`, full clone trên `local-lvm2`, `--onboot 1`, `--startup order` (server = 1, còn lại = 2), gateway `192.168.8.1`, DNS `10.128.6.2 8.8.8.8`, user `ubuntu`. Mật khẩu console nằm trong password manager. Worker có allocatable khoảng 7 CPU và 13,1 GiB RAM, tối đa 110 pod.
 
-| Container | CPU request | RAM request | RAM limit | Ephemeral storage |
-| --- | --- | --- | --- | --- |
-| `runner` | 250m | 512Mi | 2Gi | 2Gi |
-| `dind` | 250m | 512Mi | 2Gi | 4Gi |
-| **Tổng** | **500m** | **1Gi** | **4Gi** | **6Gi** |
+### 1.4 Phần mềm và phiên bản
 
-- **Không đặt CPU limit**, để tránh throttling. **Có đặt RAM limit**, để một job dùng quá RAM chỉ làm chết chính nó.
-- Sau khoảng 1 tuần chạy thật, đặt request bằng mức dùng p90, xem bằng `kubectl top pod -n arc-runners --containers`.
-- Công thức ước lượng: `maxRunners ≈ min( (tổng RAM allocatable − 2 GiB) / 1 GiB , (tổng CPU allocatable − 1) / 0,5 )`. Mỗi worker có allocatable khoảng vCPU − 1 và RAM − 2,5 GiB. Theo công thức, 2 worker chứa được khoảng 20 runner.
-- Giới hạn thật là CPU host, chỉ còn khoảng 4–9 thread rảnh, nên bắt đầu với `maxRunners: 8`. Sau khi gỡ LXC thì chạy lại `pve-discovery.sh`, script sẽ gợi ý con số mới.
+| Thành phần | Phiên bản (2026-10-22) | Ghi chú |
+| --- | --- | --- |
+| OS của VM | Ubuntu 24.04.5 LTS, kernel 6.8.0-147 | Cloud image `noble-server-cloudimg-amd64.img` |
+| k3s | `v1.36.5+k3s1` (containerd 2.3.4) | Cài qua `get.k3s.io` với `INSTALL_K3S_VERSION`, flannel `host-gw`, đã tắt traefik và servicelb |
+| ARC (2 chart) | `0.15.0` | `gha-runner-scale-set-controller` + `gha-runner-scale-set` |
+| Runner image | `ghcr.io/actions/actions-runner:2.338.1` | Phải cập nhật khoảng hằng tháng (mục 3) |
+| dind | `docker:dind` (Docker 29.9.2 lúc cài) | Chưa pin version |
+| `docker compose` trong runner | Plugin compose v5.x, lấy từ image `docker:dind` qua init container `init-compose-plugin` | Thêm ngày 2026-10-22: image runner chuẩn không có compose |
+| helm | v3.22.1 | Cài trên `k3s-server-1` |
+| Registry mirror | `registry:3` + Docker (`get.docker.com`) | |
 
-## Mạng (vmbr1)
+### 1.5 GitHub
 
-Mỗi VM chỉ tốn 1 IP trên `vmbr1`, tức 0 IP của LAN công ty, dù chạy bao nhiêu runner. Các dải nội bộ không đụng tới LAN:
-
-| Dải | Dùng cho |
+| Mục | Giá trị |
 | --- | --- |
-| `10.42.0.0/16` | Pod (flannel; mỗi node một `/24`) |
-| `10.43.0.0/16` | Service Kubernetes |
-| `172.17.0.0/16` | Container của job, riêng trong từng pod dind |
+| Org | `Gravity-Global` (khoảng 1003 repo) |
+| GitHub App | `gravityactionvn` (GravityActionVN). App ID **`1192728`**, Installation ID **`63354448`** |
+| Quyền App | Organization `Self-hosted runners` = Read and write (thứ ARC cần), cùng nhiều quyền rộng khác: code, administration, workflows… (xem [github-app.md](github-app.md)) |
+| Repository access của installation | All repositories |
+| Private key ARC dùng | Tạo ngày 2026-10-22, fingerprint **`SHA256:HIWdluCnKDj2e85r2D5+LlbprcdZyt0d/LXvhydrvas=`**. File `.pem` chỉ lưu trong password manager và secret `github-app` của cụm. Các key khác của App thuộc hệ thống khác, **không được xoá** |
+| Runner group | `VN-Team` (giống runner LXC cũ) |
+| Scale set | `vn-gaqc-docker` (= `runs-on`), Helm release `vn-gaqc-docker`, namespace `arc-runners` |
+| Workflow đã chạy thật | `Gravity-Global/gg-ai-command-center-app` → reusable `Gravity-Global/gravity-workflows-github-action-vn-team/.github/workflows/sonarqube-quality-gate.yml@production` (job `SonarQubeQualityGateCheck / SonarQube-Scan`) |
+| Docker Hub | Không dùng tài khoản, mirror kéo ẩn danh |
 
-Ba dải này không được trùng với mạng mà job cần truy cập (LAN, VPN). Nếu trùng, đặt `cluster-cidr`/`service-cidr` khác trong config server **trước khi** cài k3s, vì sau khi cài không đổi được. Discovery đã xác nhận hiện không có dải nào bị trùng.
+### 1.6 Vị trí file
 
-**IP tĩnh phải nằm ngoài dải DHCP** (`192.168.8.10`–`192.168.11.254`). Nếu nằm trong dải, DHCP có thể cấp trùng IP cho VM khác, nhất là lúc VM của cụm đang tắt. Cả hai script đều báo FAIL khi IP nằm trong dải DHCP.
+| Máy | Đường dẫn | Nội dung |
+| --- | --- | --- |
+| Proxmox host | `/root/selfhost-auto-scale/` | `k3s-plan.env`, `pve-discovery.sh`, `pve-create-vms.sh`, `node-prep.sh`, tải từ repo (mục 6.1) |
+| Proxmox host | `/root/k3s-token` | Token của cụm k3s (quyền 600) |
+| Proxmox host | `/root/.ssh/id_ed25519` | Private key SSH vào các VM |
+| Proxmox host | `/etc/network/interfaces` | Khối `vmbr1`: NAT + MSS clamp (mục 6.2) |
+| Proxmox host | `/etc/dhcp/dhcpd.conf` | Dải DHCP của `vmbr1` (do hệ thống khác quản lý, **không sửa**) |
+| Proxmox host | `/var/lib/vz/snippets/k3s-vendor.yaml` | cloud-init vendor-data: cài `qemu-guest-agent`, `curl`, `chrony` |
+| Proxmox host | `/var/lib/vz/template/iso/noble-server-cloudimg-amd64.img` | Cloud image dùng để tạo template |
+| Mọi node k3s | `/etc/rancher/k3s/config.yaml` | Config k3s (có token) |
+| Mọi node k3s | `/etc/rancher/k3s/registries.yaml` | Trỏ `docker.io` tới mirror `192.168.8.5:5000` |
+| Mọi node k3s | `/etc/sysctl.d/90-k3s-runners.conf`, `/etc/apt/apt.conf.d/52unattended-no-reboot` | Tạo bởi `node-prep.sh` |
+| `k3s-server-1` | `~/controller-values.yaml`, `~/runner-values.yaml` | Values đang cài. Bản sao trong repo: [k8s/](../k8s/) |
+| `k3s-server-1` | `~/.kube/config`, `~/.bashrc` (`KUBECONFIG`, `ARC_VERSION`, `RUNNER_VERSION`), `/etc/environment` (`KUBECONFIG`) | Để `kubectl`/`helm` chạy được, cả khi chạy qua SSH một dòng |
+| `k3s-server-1` | `/var/lib/rancher/k3s/server/db/snapshots` | Snapshot etcd tự động 12 giờ/lần, giữ 10 bản |
+| `registry-mirror` | `/opt/mirror/config.yml`, `/opt/mirror/compose.yaml`, `/srv/registry` | Config mirror và cache. Bản sao trong repo: [mirror/](../mirror/) |
+| Cụm | Secret `github-app` (namespace `arc-runners`) | `github_app_id`, `github_app_installation_id`, `github_app_private_key` |
 
-### NAT và MSS clamp
+### 1.7 Secrets
 
-Khối `vmbr1` trong `/etc/network/interfaces`. Các dòng `-C ... || -A ...` chỉ thêm rule khi rule chưa có, nên dù reload nhiều lần cũng không bị trùng:
+| Secret | Lưu ở đâu | Dùng khi |
+| --- | --- | --- |
+| Mật khẩu console `ubuntu` (`CI_PASSWORD`) | Password manager | Vào Console noVNC khi SSH hỏng |
+| Token cụm k3s | `/root/k3s-token` + password manager | Thêm node, cài lại k3s |
+| Private key GitHub App (`.pem`) | Password manager + secret `github-app` trong cụm | Tạo lại secret, đổi key |
+| SSH private key | `/root/.ssh/id_ed25519` trên Proxmox host | SSH vào VM |
+
+Không secret nào nằm trong repo. **Không** commit `k3s-plan.env` nếu có thêm mật khẩu vào đó, và không commit `.pem` hay token.
+
+### 1.8 Runner LXC cũ
+
+| VMID | Tên | Trạng thái |
+| --- | --- | --- |
+| 100–110 | `github-runner-<id>-<ngày>` | **Dừng** từ 2026-10-22, chưa xoá. Có thể còn đăng ký Offline trên GitHub |
+| 111–135 | `github-runner-<id>-20261020MAY` | Đã xoá (`pct destroy --purge`) ngày 2026-10-22 |
+
+Các LXC này được tạo bởi script cũ, nằm trên branch `master` của repo: `lxc_create_github_actions_runner.master.sh` tạo LXC mẫu, `lxc_create_github_actions_runner.clone.sh` clone và đăng ký runner. Script cũ đã bị gỡ khỏi branch `v2` ở commit `facbe3d`. Đặc điểm của runner cũ:
+
+- LXC privileged (`unprivileged 0`, `nesting=1,keyctl=1`), 5 core / 32 GiB / swap 32 GiB / disk 50 GB trên `local-lvm2`, `vmbr1` lấy IP qua DHCP, có `/dev/net/tun` (cho OpenVPN).
+- Đăng ký bằng **PAT** (`GITHUB_TOKEN` có quyền `admin:org`), không dùng GitHub App. Labels: `vn-gaqc-docker,test-setup` cùng các label mặc định `self-hosted, linux, x64`. Group `VN-Team`. Runner `2.334`–`2.338`.
+- Runner chạy bằng **root** (`RUNNER_ALLOW_RUNASROOT=1`, `svc.sh install root`), `LANG/LC_ALL=en_US.UTF-8`.
+- Công cụ cài sẵn: Chrome, Edge, Firefox (PPA), Xvfb và thư viện đồ hoạ; Node.js 24 + npm; Playwright (global, có deps và browser); OpenVPN, net-tools, iptables, iproute2; Docker (`get.docker.com`, có `docker compose`); AWS CLI v2; git, curl, unzip.
+
+Image `ghcr.io/actions/actions-runner` của ARC không có các công cụ trên (riêng `docker compose` đã được bổ sung qua init container), chạy bằng user `runner` (có sudo không cần mật khẩu) và không có `NET_ADMIN`/`tun`. Workflow nào tự cài thứ mình cần (ví dụ job screenshot tự cài browser) thì chạy được ngay. Nếu nhiều workflow cần sẵn browser, Playwright, AWS CLI hay OpenVPN, dùng image tương đương LXC cũ ở [runner-image/Dockerfile](../runner-image/Dockerfile) (bản nháp, chưa build).
+
+---
+
+## 2. Việc còn lại (TODO)
+
+- [ ] Theo dõi 1–2 ngày: job `vn-gaqc-docker` xanh, không có OOM hay evict, thời gian chờ runner hợp lý.
+- [ ] Chạy load test 16 job (mục 6.9) để xác nhận cụm scale lên 8, xếp hàng đúng và về lại 0.
+- [ ] Dọn LXC cũ: xoá các runner Offline trên GitHub, rồi `pct destroy` 100–110 (mục 7).
+- [ ] Chạy lại `pve-discovery.sh` sau khi dọn LXC, rồi tăng `maxRunners` (mục 3). Cần thêm sức chứa thì thêm worker bằng IP `.6`–`.9`.
+- [ ] Báo người quản lý App `gravityactionvn` rằng ARC đang dùng key có fingerprint ở mục 1.5.
+- [ ] Cân nhắc tạo App riêng chỉ có quyền `Self-hosted runners` để giảm rủi ro ([github-app.md](github-app.md)).
+- [ ] Đặt lịch hằng tháng cập nhật runner image, và hằng năm đổi private key.
+- [ ] (Tuỳ chọn) Pin `docker:dind` theo major, gắn monitoring (Prometheus) và cảnh báo.
+
+---
+
+## 3. Cheat sheet
+
+Lệnh `kubectl`/`helm` chạy trên `k3s-server-1`: vào bằng `ssh ubuntu@192.168.8.2`, hoặc chạy một dòng `ssh ubuntu@192.168.8.2 '<lệnh>'`. Lệnh `qm`/`pct`/`ssh` chạy trong Proxmox Shell. Nếu `ARC_VERSION` trống sau khi mở phiên mới, chạy `source ~/.bashrc`.
+
+**Xem tình trạng**
+
+```bash
+kubectl get nodes -o wide
+kubectl get autoscalingrunnerset,ephemeralrunners -n arc-runners
+kubectl get pods -n arc-systems -o wide          # controller + listener phải ở k3s-server-1
+kubectl get pods -n arc-runners -o wide          # runner pod đang chạy job
+kubectl top nodes
+kubectl logs -n arc-systems $(kubectl get pods -n arc-systems -o name | grep listener) --tail=30
+```
+
+**Đổi `maxRunners`** (ví dụ lên 16). Sửa cả file values để lần `helm upgrade -f` sau không bị quay về giá trị cũ:
+
+```bash
+sed -i 's/^maxRunners: .*/maxRunners: 16/' ~/runner-values.yaml
+helm upgrade vn-gaqc-docker -n arc-runners -f ~/runner-values.yaml --version "${ARC_VERSION}" \
+  oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set
+```
+
+Sau đó cập nhật [k8s/runner-values.yaml](../k8s/runner-values.yaml) trong repo cho khớp. Hai worker 8 vCPU / 16 GiB chứa được khoảng 20 runner. Giới hạn thật là CPU rảnh của host, xem bằng `pve-discovery.sh`.
+
+**Tạm dừng nhận job** (job đang chạy vẫn chạy cho xong, job mới xếp hàng):
+
+```bash
+helm upgrade vn-gaqc-docker -n arc-runners --reuse-values --set maxRunners=0 --version "${ARC_VERSION}" \
+  oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set
+# Bật lại:
+helm upgrade vn-gaqc-docker -n arc-runners -f ~/runner-values.yaml --version "${ARC_VERSION}" \
+  oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set
+```
+
+**Quay lại runner LXC cũ** (chỉ làm được khi chưa xoá LXC và chưa xoá runner cũ trên GitHub):
+
+```bash
+helm uninstall vn-gaqc-docker -n arc-runners                                                        # k3s-server-1
+for id in $(pct list | awk '$NF ~ /^github-runner-/ { print $1 }'); do pct start "$id"; done        # Proxmox Shell
+```
+
+**Cập nhật runner image** (khoảng hằng tháng, bắt buộc: GitHub ngừng giao job cho runner quá cũ):
+
+```bash
+# k3s-server-1
+NEW=$(curl -s https://api.github.com/repos/actions/runner/releases/latest | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p'); echo "$NEW"
+sed -i "s#actions-runner:[0-9.]*#actions-runner:${NEW}#g" ~/runner-values.yaml && grep -n 'actions-runner:' ~/runner-values.yaml
+# Proxmox Shell: kéo sẵn image
+for ip in 192.168.8.3 192.168.8.4; do ssh ubuntu@$ip "sudo k3s crictl pull ghcr.io/actions/actions-runner:<NEW>"; done
+# k3s-server-1
+helm upgrade vn-gaqc-docker -n arc-runners -f ~/runner-values.yaml --version "${ARC_VERSION}" \
+  oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set
+sed -i "s/^export RUNNER_VERSION=.*/export RUNNER_VERSION=${NEW}/" ~/.bashrc
+```
+
+Cập nhật luôn bảng phiên bản ở mục 1.4 và file [k8s/runner-values.yaml](../k8s/runner-values.yaml).
+
+**Đổi private key GitHub App:** làm theo [github-app.md, mục "Đổi private key"](github-app.md#đổi-private-key-khuyến-nghị-1-lần-mỗi-năm-hoặc-ngay-khi-nghi-key-bị-lộ). Nhớ cập nhật fingerprint ở mục 1.5.
+
+**Bảo trì 1 worker** (reboot, update kernel, nâng k3s):
+
+```bash
+NODE=k3s-worker-1
+kubectl cordon "$NODE"
+while kubectl get pods -n arc-runners --field-selector spec.nodeName="$NODE" --no-headers 2>/dev/null | grep -q .; do
+  echo "$(date +%T) còn runner trên $NODE"; sleep 30
+done
+kubectl drain "$NODE" --ignore-daemonsets --delete-emptydir-data
+# ... bảo trì, ví dụ: ssh ubuntu@192.168.8.3 'sudo apt-get update && sudo apt-get -y upgrade && sudo reboot'
+kubectl uncordon "$NODE"
+```
+
+**Reboot Proxmox host:** các VM có `--onboot 1`, và server lên trước. Sau khi host lên lại:
+
+```bash
+iptables -t nat -S POSTROUTING | grep 192.168.8.0/22          # còn MASQUERADE
+iptables -t mangle -S FORWARD | grep TCPMSS                   # còn MSS 1440
+ssh ubuntu@192.168.8.2 'kubectl get nodes; kubectl get pods -n arc-systems'
+ssh ubuntu@192.168.8.5 'cd /opt/mirror && sudo docker compose ps'   # restart: unless-stopped
+```
+
+**Thêm worker:**
+
+1. Trong `/root/selfhost-auto-scale/k3s-plan.env`, đổi `WORKER_IDS="211 212 213"` và `WORKER_IPS="192.168.8.3 192.168.8.4 192.168.8.6"`.
+2. Chạy `set -a; source k3s-plan.env; set +a`, rồi `bash pve-discovery.sh`, rồi `DRY_RUN=1 bash pve-create-vms.sh`, rồi `bash pve-create-vms.sh`. VM đã có sẽ được bỏ qua.
+3. Chạy `node-prep.sh` trên `192.168.8.6` (mục 6.5).
+4. Ghi `registries.yaml` (mục 6.7) và cài agent (mục 6.6, phần worker), chỉ với IP mới.
+5. Kiểm tra bằng `kubectl get nodes`.
+
+Mỗi worker 8 vCPU / 16 GiB thêm khoảng 10–12 slot. Cập nhật mục 1.3.
+
+---
+
+## 4. Thiết kế và các quyết định
+
+| Quyết định | Lý do | Phương án đã loại |
+| --- | --- | --- |
+| ARC (Actions Runner Controller) trên k3s | Giải pháp GitHub hỗ trợ chính thức (GA), scale-to-zero, mỗi job một pod ephemeral | Tự viết autoscaler; GARM; Runner Scale Set Client (mới ở bản preview) |
+| Mỗi pod có dind riêng | Runner Docker cũ chết giữa chừng vì nhiều job dùng chung `docker.sock` (`prune`, `rm -f`, trùng tên), vì OOM và vì disk đầy | Mount `docker.sock` của node |
+| `vmbr1` (NAT qua host) | Không tốn IP LAN; cụm tách khỏi LAN vì dind chạy privileged | `vmbr0` (tốn IP LAN) |
+| IP tĩnh `192.168.8.2`–`.5` | `dhcpd` của host cấp `.10`–`.11.254`. Kế hoạch đầu tiên dùng `.201/.211/.212/.220` nằm trong dải DHCP nên đã đổi | IP trong dải DHCP |
+| Storage `local-lvm2` (thick) | `local-lvm` (thin) chỉ còn khoảng 40 GB | |
+| 2 worker 8 vCPU / 16 GiB, `maxRunners: 8` | CPU host đã bận 73–89%, RAM cấp phát đã gấp 3,6 lần RAM vật lý | 4 worker 16 vCPU / 32 GiB, 100 runner |
+| Scale set tên `vn-gaqc-docker` ngay từ đầu, dừng LXC trước khi cài | Workflow không phải sửa; không có lúc nào cả LXC lẫn scale set cùng nhận job | Chạy thử với tên tạm |
+| GitHub App có sẵn `gravityactionvn` + key riêng cho ARC | Có sẵn quyền `Self-hosted runners`; không hết hạn; thêm key không ảnh hưởng hệ thống khác | PAT (gắn với người, có hạn dùng); tạo App mới (có thể làm sau) |
+| Controller + listener chạy trên server | App có quyền rộng; job privileged trên worker không được đọc được key | Để Kubernetes tự xếp |
+| Làm mọi thứ từ Proxmox Shell | Người vận hành chỉ dùng web UI; host là gateway của `vmbr1` | SSH từ laptop qua ProxyJump |
+| MSS clamp 1440 | MTU đường ra Internet khoảng 1480; tránh `git clone`/`docker pull` bị treo khi ICMP bị chặn | `--mtu` cho dind |
+| Registry mirror ẩn danh | Không có tài khoản Docker Hub. Cache giảm số lần pull | Tài khoản + token (thêm sau nếu gặp `toomanyrequests`) |
+| Embedded etcd (`cluster-init`) | Sau này nâng lên 3 server HA mà không phải cài lại | SQLite |
+
+Request/limit của mỗi runner pod: runner 250m CPU / 512Mi (limit 2Gi), dind 250m / 512Mi (limit 2Gi). Không đặt CPU limit. `emptyDir`: work 10Gi, Docker 20Gi. Sau khoảng 1 tuần chạy thật, chỉnh request về mức dùng p90 (`kubectl top pod -n arc-runners --containers`).
+
+---
+
+## 5. Sự cố đã gặp và cách xử lý
+
+| Sự cố | Nguyên nhân | Cách xử lý / phòng tránh |
+| --- | --- | --- |
+| Chạy script xong thì phiên Shell tự `logout` | Script được `source` hoặc dán thẳng, nên lệnh `exit` thoát luôn shell | Bọc toàn bộ script trong `main() ( ... )` (subshell). Chạy bằng `bash script.sh` |
+| Hàng trăm dòng `[1] 835988` khi quét IP | Thông báo job control của shell tương tác | `set +m` và chuyển hướng stderr của vòng ping |
+| Discovery báo thiếu RAM / ZFS ARC 375 GiB | Script tính cả RAM của VM đang tắt; tính ARC dù không có pool ZFS | Tính theo `MemAvailable`; bỏ qua ARC khi không có pool |
+| IP `.201/.211/.212/.220` bị báo "trống" nhưng nằm trong dải DHCP | Script chưa đọc `dhcpd.conf` | Đọc dải DHCP (dhcpd, dnsmasq, Kea, SDN) và báo FAIL nếu IP nằm trong dải; đổi sang `.2`–`.5` |
+| Có 3 rule MASQUERADE trùng nhau | `post-up iptables -A` chạy lại mỗi lần `ifreload` hay Apply Configuration | Dùng dạng `-C ... \|\| -A ...`. Các rule trùng vô hại |
+| `Chưa có /root/admin.pub` | Biến `SSH_PUBKEY` cũ còn sót trong shell | `unset SSH_PUBKEY`; key nằm ở đường dẫn mặc định `/root/.ssh/id_ed25519.pub` |
+| Tên DHCP server hiện trống `( )` | Lệnh `sed` cắt mất tên tiến trình | Đã sửa trong script |
+| `kubectl` qua `ssh ... 'kubectl ...'` báo `permission denied` với `/etc/rancher/k3s/k3s.yaml` | SSH không tương tác không đọc `~/.bashrc` | Thêm `KUBECONFIG=/home/ubuntu/.kube/config` vào `/etc/environment` (mục 6.6) |
+| Job trên GitHub kẹt ở "Job is about to start running on the runner" | Giao diện GitHub cập nhật chậm; runner đã nhận job | Tải lại trang; xem `kubectl get ephemeralrunners -n arc-runners` |
+| Log dind có `Failed to find nft tool` | Docker 29 dò `nftables` trước, không có thì dùng iptables | Vô hại |
+| Job `check-console` lỗi `unknown flag: --rm` ở bước `docker compose run --rm ...` | Image runner chuẩn của ARC chỉ có `docker` + buildx, không có plugin compose (LXC cũ có, vì cài Docker bằng `get.docker.com`) | Thêm init container `init-compose-plugin` copy `docker-compose` từ `docker:dind` vào `/usr/local/libexec/docker/cli-plugins` của container runner ([k8s/runner-values.yaml](../k8s/runner-values.yaml)) |
+| Dán HTML nguồn của trang GitHub để lấy thông tin | | Không dán HTML nguồn (có giá trị gắn với phiên đăng nhập). Chụp màn hình hoặc copy chữ |
+
+---
+
+## 6. Dựng lại từ đầu
+
+Làm theo đúng thứ tự đã chạy ngày 2026-10-22. Mọi lệnh chạy trong Proxmox Shell, trừ khi ghi rõ chạy trên `k3s-server-1` hay VM khác.
+
+### 6.1 Tải script về host
+
+```bash
+REF=v2          # hoặc mã commit cụ thể để cố định nội dung
+BASE=https://raw.githubusercontent.com/ynguyengravity/setup-github-runner/$REF
+mkdir -p /root/selfhost-auto-scale && cd /root/selfhost-auto-scale
+curl -fsSL "$BASE/scripts/k3s-plan.env.example" -o k3s-plan.env
+for f in pve-discovery.sh pve-create-vms.sh node-prep.sh; do curl -fsSL "$BASE/scripts/$f" -o "$f"; done
+bash -n pve-discovery.sh && bash -n pve-create-vms.sh && bash -n node-prep.sh && echo OK
+```
+
+Repo `ynguyengravity/setup-github-runner` đang public. Nếu chuyển sang private, `curl` sẽ cần token; khi đó có thể dán nội dung file bằng `nano` thay cho `curl`.
+
+### 6.2 Chuẩn bị host (một lần)
+
+**SSH key:**
+
+```bash
+ls /root/.ssh/id_ed25519.pub 2>/dev/null || ssh-keygen -t ed25519 -f /root/.ssh/id_ed25519 -N '' -C 'proxmox-k3s-admin'
+```
+
+**Snippets:** vào Datacenter → Storage → `local` → Edit → Content, tick thêm **Snippets** (giữ nguyên các mục đang có).
+
+**NAT và MSS clamp trên `vmbr1`.** Khối `vmbr1` trong `/etc/network/interfaces` phải như dưới đây:
 
 ```
 auto vmbr1
@@ -112,7 +338,9 @@ iface vmbr1 inet static
         post-down iptables -t mangle -D FORWARD -s 192.168.8.0/22 -o vmbr0 -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1440
 ```
 
-Trên `vmbr1` đang có VM khác chạy. Vì vậy sau khi sửa file, **đừng chạy `ifreload -a` hay bấm Apply Configuration**: file chỉ cần có hiệu lực từ lần boot sau. Để rule có hiệu lực ngay, chạy:
+Hiện trên host, dòng MASQUERADE có thể vẫn ở dạng cũ `-A`. Cách đó vẫn chạy được, chỉ để lại rule trùng mỗi lần reload.
+
+`vmbr1` còn có VM khác đang dùng, nên **không chạy `ifreload -a`** và không bấm Apply Configuration. Muốn rule có hiệu lực ngay thì chạy trực tiếp:
 
 ```bash
 iptables -t mangle -C FORWARD -s 192.168.8.0/22 -o vmbr0 -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1440 2>/dev/null \
@@ -120,133 +348,70 @@ iptables -t mangle -C FORWARD -s 192.168.8.0/22 -o vmbr0 -p tcp --tcp-flags SYN,
 iptables -t mangle -S FORWARD | grep TCPMSS
 ```
 
-Lý do cần MSS clamp: đường ra Internet của host chỉ nhận gói tối đa 1480 byte, còn VM gửi gói 1500. Nếu ICMP bị chặn ở đâu đó, các lệnh `git clone`, `docker pull`, `npm install` sẽ treo giữa chừng. Rule trên đặt MSS = 1440 (tức 1480 − 40) trong gói SYN, chỉ cho traffic từ `192.168.8.0/22` đi ra `vmbr0`.
-
-### Làm việc từ Proxmox Shell
-
-Proxmox host là gateway của `vmbr1`, nên từ Proxmox Shell SSH thẳng được vào `192.168.8.x`. Tạo key một lần trên host. Public key này sẽ được cài vào user `ubuntu` của mọi VM:
+### 6.3 Discovery
 
 ```bash
-ls /root/.ssh/id_ed25519.pub 2>/dev/null || ssh-keygen -t ed25519 -f /root/.ssh/id_ed25519 -N '' -C 'proxmox-k3s-admin'
+cd /root/selfhost-auto-scale
+unset SSH_PUBKEY
+set -a; source ./k3s-plan.env; set +a
+bash ./pve-discovery.sh
 ```
 
-Nếu SSH hỏng (đặt nhầm IP, firewall chặn), vào Console noVNC của VM bằng mật khẩu `CI_PASSWORD` (bước 1.2).
+Script chỉ đọc, không thay đổi gì trên host. Nó kiểm tra CPU/RAM thật, storage, bridge/NAT/DHCP/MTU, IP và VMID, backup job, kết nối tới GitHub/Docker Hub, rồi gợi ý `maxRunners`. Phải không còn `FAIL` mới đi tiếp. Thêm `SCAN=1` để in danh sách IP trống (đã loại dải DHCP); thêm `CPU_SAMPLE_SEC=30` để đo CPU lâu hơn.
 
-## Bước 0 – Discovery
-
-[`scripts/pve-discovery.sh`](../scripts/pve-discovery.sh) chỉ đọc, không thay đổi gì trên host. Nó kiểm tra CPU/RAM còn trống, storage, bridge/NAT/DHCP/MTU, IP và VMID dự kiến, backup job, kết nối tới GitHub/Docker Hub, rồi gợi ý `maxRunners`.
+### 6.4 Tạo VM
 
 ```bash
-# Trong Proxmox Shell: mở nano, dán nội dung file tương ứng trong repo, lưu lại
-nano /root/k3s-plan.env        # nội dung: scripts/k3s-plan.env.example
-nano /root/pve-discovery.sh    # nội dung: scripts/pve-discovery.sh
-
-set -a; source /root/k3s-plan.env; set +a     # biến tồn tại tới khi đóng Shell
-bash /root/pve-discovery.sh
-```
-
-Sửa hết các mục `FAIL` rồi mới sang bước 1. Kết quả ngày 2026-10-22 là 0 FAIL. Các cảnh báo còn lại (CPU bận, RAM cấp phát gấp 3,6 lần RAM vật lý, LVM thick, có DHCP) đều đã được tính vào kế hoạch.
-
-Script chạy trong subshell, nên dán thẳng nội dung vào terminal cũng không làm thoát phiên. Các biến khác (ví dụ `CPU_SAMPLE_SEC`, `SCAN`) được mô tả ở đầu script.
-
-## Bước 1 – Tạo VM
-
-### 1.1 Chuẩn bị một lần
-
-- **Snippets:** vào Datacenter → Storage → `local` → Edit → Content, tick thêm **Snippets** (giữ nguyên các mục đang có). Snippet là file cloud-init giúp VM tự cài `qemu-guest-agent`, `curl`, `chrony` ở lần boot đầu.
-- **SSH key** và **NAT + MSS clamp:** xem phần Mạng.
-- Discovery báo 0 FAIL.
-
-### 1.2 Chạy `scripts/pve-create-vms.sh`
-
-Script làm các việc sau:
-
-1. Ghi snippet.
-2. Tải cloud image Ubuntu 24.04 và kiểm tra SHA256.
-3. Tạo template 9000.
-4. Clone 4 VM.
-5. Chờ từng VM lên SSH, chạy xong cloud-init, có guest agent và ra được github.com.
-
-Trước khi tạo, script kiểm tra lại VMID, IP (ping/ARP, config của VM khác, dải DHCP) và dung lượng storage. Script không sửa hay xoá VM nào đang có. VM nào của kế hoạch đã tồn tại thì bỏ qua, nên lỗi giữa chừng thì cứ chạy lại.
-
-```bash
-nano /root/pve-create-vms.sh          # nội dung: scripts/pve-create-vms.sh
-set -a; source /root/k3s-plan.env; set +a
-
-DRY_RUN=1 bash /root/pve-create-vms.sh   # chỉ kiểm tra và in lệnh sẽ chạy
-
-# Chạy thật: nhập mật khẩu console (ẩn, không lưu vào lịch sử shell), gõ YES khi được hỏi
+DRY_RUN=1 bash ./pve-create-vms.sh            # chỉ in lệnh, không tạo gì
 read -rsp 'Mật khẩu console cho user ubuntu: ' CI_PASSWORD; echo; export CI_PASSWORD
-bash /root/pve-create-vms.sh
+bash ./pve-create-vms.sh                      # gõ YES khi được hỏi; mất khoảng 10–20 phút
 unset CI_PASSWORD
 ```
 
-`CI_PASSWORD` là mật khẩu của user `ubuntu` trong VM. Nó chỉ dùng được ở Console noVNC hoặc `qm terminal`, vì cloud image đã tắt đăng nhập SSH bằng mật khẩu. Proxmox lưu bản đã hash. Đừng ghi mật khẩu này vào `k3s-plan.env` hay bất kỳ file nào trong repo.
+Script lần lượt: ghi snippet, tải cloud image (kiểm tra SHA256), tạo template 9000, clone 4 VM, rồi chờ từng VM lên SSH, chạy xong cloud-init, có guest agent và ra được github.com. VM đã có thì bỏ qua. Nếu bị ngắt giữa chừng mà một VM tạo dở, chạy `qm stop <id>; qm destroy <id> --purge` (chỉ với VMID của cụm) rồi chạy lại.
 
-### 1.3 Vì sao cấu hình như vậy
-
-| Thiết lập | Lý do |
-| --- | --- |
-| `--balloon 0` | Kubernetes lập lịch theo RAM cố định; nếu balloon thu hồi RAM, pod sẽ bị OOM giữa job |
-| `--cpu host`, `virtio-scsi-single` + `iothread` | Build nhanh hơn, ít nghẽn I/O khi nhiều pod cùng pull image |
-| `--full 1`, `--onboot 1`, `--startup order` | Node k3s không phụ thuộc vào template; host reboot thì cụm tự lên lại, server lên trước |
-| Không đưa vào backup | Vzdump dạng snapshot/suspend làm VM đứng, runner mất kết nối. Khi tạo backup job, exclude 211, 212, 220. Server 201 đã có snapshot etcd 12 giờ/lần trong `/var/lib/rancher/k3s/server/db/snapshots` |
-| Firewall (nếu bật ở cấp VM) | Chỉ cần mở trong `192.168.8.0/22`: TCP 22, 6443, 10250, 5000 (mirror), và 2379–2380 khi có nhiều server. Outbound cần HTTPS tới `github.com`, `*.actions.githubusercontent.com`, `ghcr.io`, `pkg-containers.githubusercontent.com` |
-
-## Bước 2 – Chuẩn bị OS các node k3s
-
-Bước này tăng giới hạn inotify/file và chặn auto-reboot trên server và 2 worker. VM mirror không cần bước này. Script nằm ở [`scripts/node-prep.sh`](../scripts/node-prep.sh); tải về Proxmox host cùng chỗ với các script khác (ví dụ `/root/selfhost-auto-scale/`), rồi chạy cho từng node:
+### 6.5 Chuẩn bị OS (`node-prep.sh`)
 
 ```bash
 for ip in 192.168.8.2 192.168.8.3 192.168.8.4; do
   ssh -o StrictHostKeyChecking=accept-new ubuntu@$ip 'bash -s' < node-prep.sh
 done
-# Worker mong đợi: cpu=8 mem=15G disk~97G, swap: off
+# Mong đợi: inotify=8192, swap: off, time: Normal; worker cpu=8 mem=15G disk=96G
 ```
 
-## Bước 3 – Cài k3s
+Script tăng giới hạn inotify/file (mọi container dind dùng chung giới hạn inotify của root), tắt auto-reboot của unattended-upgrades và bật chrony.
 
-### 3.1 Token và version (Proxmox Shell)
+### 6.6 Cài k3s
 
 ```bash
-# Token của cụm: lưu trên host để các phiên Shell sau dùng lại, và cất thêm một bản vào password manager
+cd /root/selfhost-auto-scale
 [ -f /root/k3s-token ] || (umask 077; openssl rand -hex 32 > /root/k3s-token)
 export K3S_TOKEN=$(cat /root/k3s-token)
+# Dựng lại đúng bản đang chạy: K3S_VERSION=v1.36.5+k3s1. Muốn bản stable mới nhất thì dùng dòng dưới
+export K3S_VERSION=$(curl -sI https://update.k3s.io/v1-release/channels/stable | awk -F/ 'tolower($1) ~ /^location:/ {print $NF}' | tr -d '\r')
+echo "K3S_VERSION=$K3S_VERSION"
 
-curl -sI https://update.k3s.io/v1-release/channels/stable | grep -i '^location'   # -> .../tag/v1.xx.y+k3s1
-export K3S_VERSION='v1.xx.y+k3s1'   # pin bản vừa thấy, ghi lại vào /root/k3s-plan.env
-```
-
-### 3.2 Server
-
-```bash
+# Server
 ssh ubuntu@192.168.8.2 "sudo mkdir -p /etc/rancher/k3s && sudo tee /etc/rancher/k3s/config.yaml >/dev/null" <<EOF
-cluster-init: true                 # embedded etcd, sau này thêm server HA được
+cluster-init: true
 token: "${K3S_TOKEN}"
 tls-san:
   - 192.168.8.2
 disable:
   - traefik
   - servicelb
-flannel-backend: host-gw           # mọi node cùng L2 trên vmbr1: không encapsulation
+flannel-backend: host-gw
 node-taint:
-  - "CriticalAddonsOnly=true:NoExecute"   # runner không chạy trên server
+  - "CriticalAddonsOnly=true:NoExecute"
 kubelet-arg:
   - "system-reserved=cpu=500m,memory=1Gi"
   - "kube-reserved=cpu=500m,memory=1Gi"
 etcd-snapshot-schedule-cron: "0 */12 * * *"
 etcd-snapshot-retention: 10
 EOF
-
 ssh ubuntu@192.168.8.2 "curl -sfL https://get.k3s.io | sudo INSTALL_K3S_VERSION='${K3S_VERSION}' sh -s - server"
-ssh ubuntu@192.168.8.2 "sudo k3s kubectl get nodes"
-```
 
-`flannel-backend` phải chọn trước khi cài, vì đổi sau rất phức tạp.
-
-### 3.3 Worker
-
-```bash
+# Worker
 for ip in 192.168.8.3 192.168.8.4; do
   ssh ubuntu@$ip "sudo mkdir -p /etc/rancher/k3s && sudo tee /etc/rancher/k3s/config.yaml >/dev/null" <<EOF
 server: "https://192.168.8.2:6443"
@@ -263,87 +428,36 @@ kubelet-arg:
 EOF
   ssh ubuntu@$ip "curl -sfL https://get.k3s.io | sudo INSTALL_K3S_VERSION='${K3S_VERSION}' sh -s - agent"
 done
-```
 
-Phần reserved giữ 1 vCPU và 2 GiB cho OS và k3s, nên node đầy thì kubelet vẫn sống. `eviction-hard` phải ghi đủ cả 4 ngưỡng, nếu bỏ một ngưỡng thì ngưỡng đó có thể mất giá trị mặc định.
-
-### 3.4 kubectl và helm (trên k3s-server-1)
-
-```bash
-ssh ubuntu@192.168.8.2
-```
-
-```bash
-# Trong k3s-server-1, chạy một lần
+# kubectl + helm cho user ubuntu trên server (cả khi chạy qua ssh một dòng)
+ssh ubuntu@192.168.8.2 'bash -s' <<'EOF'
+set -e
 mkdir -p ~/.kube
 sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
 sudo chown "$(id -u):$(id -g)" ~/.kube/config && chmod 600 ~/.kube/config
-echo 'export KUBECONFIG=~/.kube/config' >> ~/.bashrc && export KUBECONFIG=~/.kube/config
+grep -q 'KUBECONFIG=' ~/.bashrc || echo 'export KUBECONFIG=~/.kube/config' >> ~/.bashrc
+grep -q KUBECONFIG /etc/environment || echo 'KUBECONFIG=/home/ubuntu/.kube/config' | sudo tee -a /etc/environment >/dev/null
 curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-sudo apt-get install -y jq
-
-kubectl get nodes -o wide                                    # 3 node Ready
-kubectl describe node k3s-worker-1 | grep -A7 '^Allocatable'  # cpu ~7, memory ~13.5 GiB, pods 110
-kubectl run nettest --rm -it --restart=Never --image=busybox:1.36 -- \
-  sh -c 'nslookup github.com && wget -qO- https://api.github.com/zen'
-```
-
-Các file values ở bước 6–7 nằm trong thư mục home trên server. Sau khi sửa, copy nội dung về repo này để lưu vào git.
-
-## Bước 4 – Registry mirror
-
-Khi nhiều runner cùng ra Internet qua một IP NAT, Docker Hub sẽ giới hạn số lượt pull ([pull limits](https://docs.docker.com/docker-hub/usage/pulls/)) và job lỗi với `toomanyrequests`. Mirror giúp mỗi image chỉ phải kéo từ Docker Hub một lần.
-
-### 4.1 Dựng mirror
-
-```bash
-ssh ubuntu@192.168.8.5
-```
-
-```bash
-# Trong registry-mirror
-curl -fsSL https://get.docker.com | sudo sh
-sudo mkdir -p /opt/mirror /srv/registry && cd /opt/mirror
-
-# Dùng account Docker Hub (kể cả free) + Personal Access Token để được hạn mức cao hơn so với ẩn danh
-sudo tee config.yml >/dev/null <<'EOF'
-version: 0.1
-log:
-  level: info
-storage:
-  filesystem:
-    rootdirectory: /var/lib/registry
-  delete:
-    enabled: true
-http:
-  addr: :5000
-proxy:
-  remoteurl: https://registry-1.docker.io
-  username: <DOCKERHUB_USER>
-  password: <DOCKERHUB_TOKEN>
-  ttl: 168h
+sudo apt-get install -y -qq jq >/dev/null
 EOF
-sudo chmod 600 config.yml
-
-sudo tee compose.yaml >/dev/null <<'EOF'
-services:
-  registry:
-    image: registry:3
-    restart: unless-stopped
-    ports:
-      - "5000:5000"
-    volumes:
-      - ./config.yml:/etc/distribution/config.yml:ro
-      - /srv/registry:/var/lib/registry
-EOF
-sudo docker compose up -d
+sleep 20
+ssh ubuntu@192.168.8.2 'kubectl get nodes -o wide'    # 3 node Ready
 ```
 
-Mỗi instance chỉ proxy được một upstream. Muốn cache thêm `ghcr.io`, chạy thêm một instance ở port khác. Đừng NAT hay port-forward port 5000 ra ngoài `vmbr1`: mirror không có xác thực và đang dùng token Docker Hub của bạn.
+Một số điểm cần nhớ:
 
-### 4.2 Cho containerd của k3s dùng mirror (Proxmox Shell)
+- `flannel-backend: host-gw` phải chọn trước khi cài, vì đổi về sau rất phức tạp. Cách này chạy được vì mọi node cùng L2 trên `vmbr1`.
+- Server có taint `CriticalAddonsOnly`, nên runner không bao giờ chạy trên server. Riêng controller và listener được cấp toleration để chạy ở đó.
+- Kiểm tra mạng từ trong pod: `kubectl run nettest --rm -i --restart=Never --image=busybox:1.36 -- sh -c 'nslookup github.com && wget -qO- https://api.github.com/zen'`.
+
+### 6.7 Registry mirror
 
 ```bash
+ssh ubuntu@192.168.8.5 'curl -fsSL https://get.docker.com | sudo sh >/dev/null 2>&1 && sudo mkdir -p /opt/mirror /srv/registry'
+curl -fsSL "$BASE/mirror/config.yml"   | ssh ubuntu@192.168.8.5 'sudo tee /opt/mirror/config.yml >/dev/null && sudo chmod 600 /opt/mirror/config.yml'
+curl -fsSL "$BASE/mirror/compose.yaml" | ssh ubuntu@192.168.8.5 'sudo tee /opt/mirror/compose.yaml >/dev/null'
+ssh ubuntu@192.168.8.5 'cd /opt/mirror && sudo docker compose up -d && sudo docker compose ps'
+
 for ip in 192.168.8.2 192.168.8.3 192.168.8.4; do
   ssh ubuntu@$ip "sudo tee /etc/rancher/k3s/registries.yaml >/dev/null" <<'EOF'
 mirrors:
@@ -355,235 +469,89 @@ done
 ssh ubuntu@192.168.8.2 'sudo systemctl restart k3s'
 for ip in 192.168.8.3 192.168.8.4; do ssh ubuntu@$ip 'sudo systemctl restart k3s-agent'; done
 
-# Kiểm tra
 ssh ubuntu@192.168.8.3 'sudo k3s crictl pull docker.io/library/alpine:3.20'
-curl -s http://192.168.8.5:5000/v2/_catalog      # {"repositories":["library/alpine"]}
+curl -s http://192.168.8.5:5000/v2/_catalog          # {"repositories":["library/alpine"]}
 ```
 
-Docker bên trong runner pod được trỏ vào mirror qua `--registry-mirror` ở bước 7. Nếu mirror chết, cả containerd lẫn dockerd tự quay về kéo thẳng từ Docker Hub.
+Biến `$BASE` lấy từ mục 6.1. Mirror chạy ẩn danh. Cách thêm tài khoản Docker Hub được ghi ở đầu file [mirror/config.yml](../mirror/config.yml). Nếu mirror chết, containerd và dockerd tự kéo thẳng từ Docker Hub. Không NAT hay port-forward port 5000 ra ngoài `vmbr1`.
 
-## Bước 5 – GitHub App, runner group, secret
+### 6.8 GitHub App, ARC controller và scale set
 
-ARC xác thực với GitHub bằng một GitHub App thuộc org. App không gắn với tài khoản cá nhân, và private key của nó không hết hạn.
+**Secret `github-app`** (trên `k3s-server-1`):
 
-### 5.1 Tạo GitHub App
+1. Dán key vào file bằng `nano ~/arc-app.pem`.
+2. Kiểm tra key và fingerprint. Fingerprint phải khớp với giá trị ở mục 1.5:
+    ```bash
+    openssl rsa -in ~/arc-app.pem -check -noout && \
+      echo "SHA256:$(openssl rsa -in ~/arc-app.pem -pubout -outform DER 2>/dev/null | openssl sha256 -binary | openssl base64)"
+    ```
+3. Tạo secret rồi xoá file key:
+    ```bash
+    kubectl create namespace arc-systems
+    kubectl create namespace arc-runners
+    kubectl create secret generic github-app -n arc-runners \
+      --from-literal=github_app_id=1192728 \
+      --from-literal=github_app_installation_id=63354448 \
+      --from-file=github_app_private_key=$HOME/arc-app.pem
+    shred -u ~/arc-app.pem
+    ```
 
-Org đã có App `gravityactionvn`. Làm theo [docs/github-app.md, mục "Dùng App có sẵn"](github-app.md#dùng-app-có-sẵn-gravityactionvn) để lấy App ID, Installation ID và tạo thêm một private key riêng cho ARC. Việc này không đụng tới key đang có hay Client secret.
+Chi tiết và cách xử lý lỗi xem [docs/github-app.md](github-app.md).
 
-### 5.2 Runner group
-
-Mở Org → Settings → Actions → Runner groups và xem các runner LXC `vn-gaqc-docker` hiện tại đang thuộc group nào, được dùng cho những repo nào. Scale set mới phải nằm trong group cho phép **đúng các repo đó**, nếu không job sẽ đứng mãi ở "Waiting for a runner".
-
-- Runner cũ đang ở group `Default`: bỏ dòng `runnerGroup` trong values ở bước 7.
-- Muốn dùng group riêng: tạo group `proxmox`, chỉ chọn các repo nội bộ, và **không** tick "Allow public repositories". Lý do: dind chạy privileged, PR từ fork có thể chiếm quyền node.
-
-### 5.3 Secret (trên k3s-server-1)
-
-Tạo secret `github-app` trong namespace `arc-runners` theo [docs/github-app.md, mục "Dùng trong project này"](github-app.md#dùng-trong-project-này).
-
-**Phương án dự phòng: PAT.** Nếu chưa tạo được App, có thể dùng fine-grained PAT với Resource owner là org và quyền `Self-hosted runners` = Read and write. Nếu org không cho dùng fine-grained PAT thì dùng classic PAT với scope `admin:org`. Nên tạo PAT bằng tài khoản bot và ghi lại ngày hết hạn.
+**Controller** (trên `k3s-server-1`):
 
 ```bash
-kubectl create namespace arc-systems
-kubectl create namespace arc-runners
-read -rsp 'GitHub token: ' GH_TOKEN; echo
-kubectl create secret generic github-token -n arc-runners --from-literal=github_token="$GH_TOKEN"
-unset GH_TOKEN
-```
-
-Khi dùng PAT, đặt `githubConfigSecret: github-token` ở bước 7.
-
-## Bước 6 – ARC controller (trên k3s-server-1)
-
-Chỉ dùng ARC bản GitHub hỗ trợ (chart `gha-runner-scale-set*`, CRD `actions.github.com`). Bản mới nhất lúc viết là [0.15.0](https://github.blog/changelog/2026-09-30-actions-runner-controller-release-0-15-0/). Kiểm tra trang [releases](https://github.com/actions/actions-runner-controller/releases) và pin cùng một version cho cả hai chart.
-
-`~/controller-values.yaml`:
-
-```yaml
-replicaCount: 1
-resources:
-  requests: { cpu: 100m, memory: 256Mi }
-  limits: { memory: 1Gi }
-flags:
-  logLevel: "info"
-metrics:                      # Prometheus metrics cho controller và listener
-  controllerManagerAddr: ":8080"
-  listenerAddr: ":8080"
-  listenerEndpoint: "/metrics"
-# Chạy trên k3s-server-1: worker có job privileged, không để credential GitHub nằm ở đó
-nodeSelector:
-  node-role.kubernetes.io/control-plane: "true"
-tolerations:
-  - key: CriticalAddonsOnly
-    operator: Exists
-```
-
-```bash
-export ARC_VERSION=0.15.0
+REF=v2; BASE=https://raw.githubusercontent.com/ynguyengravity/setup-github-runner/$REF
+curl -fsSL "$BASE/k8s/controller-values.yaml" -o ~/controller-values.yaml
+curl -fsSL "$BASE/k8s/runner-values.yaml"     -o ~/runner-values.yaml
+export ARC_VERSION=0.15.0          # bản mới nhất: helm show chart oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set-controller | grep ^version
+grep -q ARC_VERSION ~/.bashrc || echo "export ARC_VERSION=$ARC_VERSION" >> ~/.bashrc
 helm install arc --namespace arc-systems -f ~/controller-values.yaml --version "${ARC_VERSION}" \
   oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set-controller
-
-kubectl get pods -n arc-systems -o wide    # arc-gha-rs-controller-... Running, cột NODE = k3s-server-1
-kubectl get crd | grep actions.github.com  # 4 CRD
+kubectl get pods -n arc-systems -o wide            # Running trên k3s-server-1
+kubectl get crd | grep actions.github.com          # 4 CRD
 ```
 
-Tên release `arc` sinh ra ServiceAccount `arc-gha-rs-controller`, tên này được dùng ở bước 7.
-
-**Vì sao controller và listener chạy trên server:** hai pod này đọc secret chứa private key của GitHub App. Runner pod chạy dind privileged, nên code của job gần như có quyền root trên worker. Nếu controller hoặc listener chạy chung node với runner, một job xấu có thể đọc được key. `k3s-server-1` đã có taint `CriticalAddonsOnly`, nên runner không bao giờ được xếp lên đó. App `gravityactionvn` có quyền rộng (code, admin, workflows trên mọi repo), nên điểm này đặc biệt quan trọng.
-
-## Bước 7 – Runner scale set (trên k3s-server-1)
-
-`~/runner-values.yaml`. Template dind được viết tay, không dùng `containerMode.type: dind`, để chỉnh được resources, mirror và storage:
-
-```yaml
-githubConfigUrl: "https://github.com/Gravity-Global"
-githubConfigSecret: github-app       # hoặc github-token nếu dùng PAT (bước 5.3)
-
-runnerScaleSetName: "vn-gaqc-docker"   # = runs-on của workflow
-runnerGroup: "proxmox"                 # bỏ dòng này nếu dùng group Default (bước 5.2)
-
-minRunners: 0
-maxRunners: 8                          # tăng dần sau khi gỡ runner LXC cũ
-
-controllerServiceAccount:
-  namespace: arc-systems
-  name: arc-gha-rs-controller
-
-# Listener giữ credential GitHub: chạy trên k3s-server-1, không chạy chung node với job privileged
-listenerTemplate:
-  spec:
-    nodeSelector:
-      node-role.kubernetes.io/control-plane: "true"
-    tolerations:
-      - key: CriticalAddonsOnly
-        operator: Exists
-    containers:
-      - name: listener          # bắt buộc đúng tên này; các trường khác ARC giữ mặc định
-
-template:
-  spec:
-    nodeSelector:
-      gha-runner: "true"
-    topologySpreadConstraints:         # rải đều runner sang các worker
-      - maxSkew: 2
-        topologyKey: kubernetes.io/hostname
-        whenUnsatisfiable: ScheduleAnyway
-        labelSelector:
-          matchLabels:
-            actions.github.com/scale-set-name: vn-gaqc-docker   # luôn trùng runnerScaleSetName
-
-    initContainers:
-      - name: init-dind-externals
-        image: ghcr.io/actions/actions-runner:<RUNNER_VERSION>
-        command: ["cp", "-r", "/home/runner/externals/.", "/home/runner/tmpDir/"]
-        volumeMounts:
-          - name: dind-externals
-            mountPath: /home/runner/tmpDir
-
-      # Docker daemon riêng của pod, chạy dạng native sidecar
-      - name: dind
-        image: docker:dind            # nên pin major, ví dụ docker:<major>-dind
-        restartPolicy: Always
-        args:
-          - dockerd
-          - --host=unix:///var/run/docker.sock
-          - --group=$(DOCKER_GROUP_GID)
-          - --registry-mirror=http://192.168.8.5:5000
-          - --insecure-registry=192.168.8.5:5000
-        env:
-          - name: DOCKER_GROUP_GID
-            value: "123"
-        securityContext:
-          privileged: true
-        startupProbe:
-          exec:
-            command: ["docker", "info"]
-          failureThreshold: 24
-          periodSeconds: 5
-        resources:
-          requests: { cpu: 250m, memory: 512Mi, ephemeral-storage: 4Gi }
-          limits: { memory: 2Gi }
-        volumeMounts:
-          - name: work
-            mountPath: /home/runner/_work
-          - name: dind-sock
-            mountPath: /var/run
-          - name: dind-externals
-            mountPath: /home/runner/externals
-          - name: dind-storage
-            mountPath: /var/lib/docker
-
-    containers:
-      - name: runner
-        image: ghcr.io/actions/actions-runner:<RUNNER_VERSION>
-        imagePullPolicy: IfNotPresent
-        command: ["/home/runner/run.sh"]
-        env:
-          - name: DOCKER_HOST
-            value: unix:///var/run/docker.sock
-          - name: RUNNER_WAIT_FOR_DOCKER_IN_SECONDS
-            value: "120"
-        resources:
-          requests: { cpu: 250m, memory: 512Mi, ephemeral-storage: 2Gi }
-          limits: { memory: 2Gi }
-        volumeMounts:
-          - name: work
-            mountPath: /home/runner/_work
-          - name: dind-sock
-            mountPath: /var/run
-
-    volumes:
-      - name: work
-        emptyDir: { sizeLimit: 10Gi }
-      - name: dind-sock
-        emptyDir: {}
-      - name: dind-externals
-        emptyDir: {}
-      - name: dind-storage
-        emptyDir: { sizeLimit: 20Gi }
-```
-
-| Thiết lập | Vai trò |
-| --- | --- |
-| dind sidecar `restartPolicy: Always` | Mỗi pod có Docker riêng; sidecar tắt theo runner, nên pod kết thúc sạch |
-| `dind-storage` tại `/var/lib/docker` | Docker dùng được `overlay2` trên disk của node. Thiếu mount này, Docker rơi về `vfs`, rất chậm và nhanh đầy disk |
-| `sizeLimit` | Job ghi quá giới hạn thì chỉ pod đó bị evict, node vẫn an toàn |
-| `--registry-mirror` | `docker pull` trong job đi qua mirror ở bước 4 |
-| `RUNNER_WAIT_FOR_DOCKER_IN_SECONDS` | Runner chờ dockerd sẵn sàng rồi mới nhận job |
-| Không có `--mtu` | Không cần, vì MSS clamp trên host đã xử lý MTU 1480 |
+**Kéo sẵn image runner** (Proxmox Shell). Dùng đúng version trong `runner-values.yaml`:
 
 ```bash
-# Trên k3s-server-1: pin bản runner mới nhất
-export RUNNER_VERSION=$(curl -s https://api.github.com/repos/actions/runner/releases/latest \
-  | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p')
-echo "$RUNNER_VERSION"
-sed -i.bak "s/<RUNNER_VERSION>/${RUNNER_VERSION}/g" ~/runner-values.yaml
-```
-
-```bash
-# Trong Proxmox Shell: kéo sẵn image lên các worker
-RUNNER_VERSION='<giá trị vừa in>'
 for ip in 192.168.8.3 192.168.8.4; do
-  ssh ubuntu@$ip "sudo k3s crictl pull ghcr.io/actions/actions-runner:${RUNNER_VERSION} && sudo k3s crictl pull docker.io/library/docker:dind"
+  ssh ubuntu@$ip "sudo k3s crictl pull ghcr.io/actions/actions-runner:2.338.1 && sudo k3s crictl pull docker.io/library/docker:dind"
 done
 ```
 
+**Scale set** (trên `k3s-server-1`). Nếu runner LXC cũ còn chạy, dừng chúng trước (mục 7):
+
 ```bash
-# Trên k3s-server-1. Dừng LXC runner TRƯỚC khi cài (phần Chuyển đổi). Tên release = runnerScaleSetName
+helm template vn-gaqc-docker -n arc-runners -f ~/runner-values.yaml --version "${ARC_VERSION}" \
+  oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set >/dev/null && echo VALUES_OK
 helm install vn-gaqc-docker --namespace arc-runners -f ~/runner-values.yaml --version "${ARC_VERSION}" \
   oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set
-
-kubectl get autoscalingrunnerset -n arc-runners    # MIN 0, MAX 8, CURRENT 0
-kubectl get pods -n arc-systems -o wide             # có thêm pod ...-listener Running trên k3s-server-1
+kubectl get autoscalingrunnerset -n arc-runners    # vn-gaqc-docker 0 8 Running
+kubectl get pods -n arc-systems -o wide            # ...-listener Running trên k3s-server-1
+kubectl logs -n arc-systems $(kubectl get pods -n arc-systems -o name | grep listener) | tail -20
 ```
 
-Trên GitHub (Org → Settings → Actions → Runners), scale set sẽ hiện ra với 0 runner. Nếu listener báo `401`/`403`/`404`, xem bảng lỗi trong [docs/github-app.md](github-app.md#xử-lý-lỗi).
+Log listener bình thường sẽ có `getting access token for GitHub App auth`, `Starting listener` và `Calculated target runner count`, không có `401`/`403`/`404`. Trên GitHub (Org → Settings → Actions → Runners), scale set `vn-gaqc-docker` hiện ra trong group `VN-Team`.
 
-## Bước 8 – Load test
+Cách hoạt động của các phần trong `runner-values.yaml`:
 
-Runner image `actions-runner` rất tối giản và có thể thiếu tool mà LXC cũ có sẵn. Job cần tool nào thì dùng action `setup-*`, chạy job trong `container:`, hoặc build image riêng `FROM ghcr.io/actions/actions-runner:<RUNNER_VERSION>`.
+| Thiết lập | Vai trò |
+| --- | --- |
+| dind sidecar `restartPolicy: Always` | Mỗi pod có Docker riêng; sidecar tắt theo runner, pod kết thúc sạch |
+| `dind-storage` tại `/var/lib/docker` | Docker dùng `overlay2` trên disk của node. Thiếu mount này, Docker rơi về `vfs`, rất chậm và nhanh đầy disk |
+| `sizeLimit` | Job ghi quá giới hạn thì chỉ pod đó bị evict |
+| `--registry-mirror` | `docker pull` trong job đi qua mirror |
+| `RUNNER_WAIT_FOR_DOCKER_IN_SECONDS` | Runner chờ dockerd sẵn sàng rồi mới nhận job |
+| `init-compose-plugin` + volume `docker-plugins` | Có `docker compose` trong job; plugin lấy từ image `docker:dind` đã có sẵn trên node |
+| `listenerTemplate` / `nodeSelector` của controller | Credential GitHub không nằm trên worker |
+| `topologySpreadConstraints` | Rải runner đều giữa các worker |
 
-Chạy test sau khi đã dừng LXC runner, để chắc chắn job chạy trên cụm mới. Số job nên test vào khoảng 2 × `maxRunners`. Tạo `.github/workflows/arc-load-test.yml` trong một repo thuộc runner group:
+### 6.9 Load test
+
+Image runner rất tối giản và có thể thiếu tool mà LXC cũ có sẵn. Job cần tool nào thì dùng action `setup-*`, chạy job trong `container:`, hoặc build image riêng `FROM ghcr.io/actions/actions-runner:<version>`.
+
+Số job nên test vào khoảng 2 × `maxRunners`. Tạo `.github/workflows/arc-load-test.yml` trong một repo mà group `VN-Team` cho phép:
 
 ```yaml
 name: arc-load-test
@@ -608,7 +576,7 @@ jobs:
       - run: sleep ${{ inputs.sleep }}
 ```
 
-Theo dõi trên `k3s-server-1`:
+Theo dõi trên server:
 
 ```bash
 watch -n2 'kubectl get autoscalingrunnerset -n arc-runners; kubectl get pods -n arc-runners -o wide --no-headers | awk "{print \$3, \$7}" | sort | uniq -c; kubectl top nodes'
@@ -616,146 +584,87 @@ watch -n2 'kubectl get autoscalingrunnerset -n arc-runners; kubectl get pods -n 
 
 Tiêu chí đạt:
 
-- [ ] Trong 1–2 phút có 8 pod Running, rải đều 2 worker. 8 job còn lại chờ rồi lần lượt được nhận.
-- [ ] 16/16 job xanh, không có `toomanyrequests`.
-- [ ] `kubectl get events -n arc-runners | grep -E 'OOMKilled|Evicted'` không trả về gì.
-- [ ] Xong hết thì về 0 pod.
-- [ ] Mỗi lần tăng `maxRunners` thì test lại, và xem CPU host ở Node → Summary.
+- 8 pod chạy cùng lúc, rải đều 2 worker. 8 job còn lại chờ rồi được nhận lần lượt.
+- 16/16 job xanh, không có `toomanyrequests` hay `OOMKilled`/`Evicted` (kiểm tra bằng `kubectl get events -n arc-runners`).
+- Chạy xong thì về 0 pod.
 
-## Chuyển đổi từ runner LXC cũ
+---
 
-Các runner LXC `github-runner-*` cũ đang phục vụ `vn-gaqc-docker`. Container 111–135 đã xoá; 100–110 vẫn chạy để CI không gián đoạn trong lúc dựng cụm. Scale set mới dùng đúng tên `vn-gaqc-docker`, nên **dừng LXC trước khi cài scale set**. Như vậy không có lúc nào hai bên cùng nhận job.
+## 7. Dừng và dọn runner LXC cũ
 
-### Thứ tự
-
-1. Làm bước 1–6 (VM, k3s, mirror, GitHub App, ARC controller). Trong lúc này, LXC vẫn chạy CI bình thường.
-2. Chọn lúc không có job đang chạy, rồi dừng LXC (chưa xoá):
-
-    ```bash
-    # Proxmox Shell
-    pct list | awk 'NR == 1 || $NF ~ /^github-runner-/'
-    for id in $(pct list | awk '$NF ~ /^github-runner-/ && $2 == "running" { print $1 }'); do   # còn job? (không in gì = không)
-      pct exec "$id" -- pgrep -fa Runner.Worker 2>/dev/null | sed "s/^/$id: /"
-    done
-    for id in $(pct list | awk '$NF ~ /^github-runner-/ && $2 == "running" { print $1 }'); do pct stop "$id"; done
-    ```
-
-3. Cài scale set (bước 7) và chạy load test (bước 8), rồi chạy lại vài workflow thật. Từ lúc dừng LXC tới lúc scale set chạy, job xếp hàng chờ chứ không mất.
-4. Nếu job đứng ở "Waiting for a runner" dù scale set đã chạy: xoá các runner cũ đang Offline trên GitHub (Org → Settings → Actions → Runners) và kiểm tra runner group (bước 5.2).
-
-**Quay lại khi có sự cố:** chạy `helm uninstall vn-gaqc-docker -n arc-runners`, rồi `pct start` lại các LXC. Cách này chỉ dùng được khi chưa xoá runner cũ khỏi GitHub.
-
-### Dọn dẹp (sau 1–2 ngày chạy ổn)
-
-1. Xoá các runner cũ đang Offline trên GitHub.
-2. Xoá LXC. Thao tác này **không hoàn tác được**, nên xem lại danh sách trước khi chạy:
-    ```bash
-    pct list | awk 'NR == 1 || $NF ~ /^github-runner-/'
-    for id in $(pct list | awk '$NF ~ /^github-runner-/ && $2 == "stopped" { print $1 }'); do
-      pct destroy "$id" --purge --destroy-unreferenced-disks 1
-    done
-    ```
-3. Chạy lại `pve-discovery.sh`. CPU host sẽ giảm rõ khi 11 runner này không còn chạy. Tăng `maxRunners` theo gợi ý của script (`helm upgrade`), rồi chạy lại load test.
-
-## Vận hành
-
-Quy tắc chung:
-
-- Không `kubectl drain` hay reboot worker khi trên đó còn runner pod.
-- Lưu các file cấu hình vào git: `k3s-plan.env`, các config k3s, values, `registries.yaml`.
-- Không lưu token hay mật khẩu.
-
-**Bảo trì 1 worker** (reboot, update kernel, nâng k3s):
+**Dừng** (đã làm ngày 2026-10-22, trước khi cài scale set):
 
 ```bash
-NODE=k3s-worker-1
-kubectl cordon "$NODE"
-while kubectl get pods -n arc-runners --field-selector spec.nodeName="$NODE" --no-headers 2>/dev/null | grep -q .; do
-  echo "$(date +%T) còn runner trên $NODE"; sleep 30
+for id in $(pct list | awk '$NF ~ /^github-runner-/ && $2 == "running" { print $1 }'); do   # còn job không (không in gì = không)
+  pct exec "$id" -- pgrep -fa Runner.Worker 2>/dev/null | sed "s/^/$id đang chạy job: /"
 done
-kubectl drain "$NODE" --ignore-daemonsets --delete-emptydir-data
-# ... bảo trì ...
-kubectl uncordon "$NODE"
+for id in $(pct list | awk '$NF ~ /^github-runner-/ && $2 == "running" { print $1 }'); do pct stop "$id"; done
+pct list | awk 'NR == 1 || $NF ~ /^github-runner-/'
 ```
 
-**Dừng nhận job toàn cụm:** chạy `helm upgrade vn-gaqc-docker -n arc-runners --reuse-values --set maxRunners=0 --version "${ARC_VERSION}" oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set`. Job đang chạy vẫn chạy cho xong, job mới sẽ xếp hàng. Xong việc thì `helm upgrade` lại với `-f ~/runner-values.yaml`.
+**Dọn** (TODO, sau 1–2 ngày chạy ổn). Thao tác này **không hoàn tác được**, và sau khi xoá thì không quay lại LXC được nữa.
 
-**Cập nhật runner image (hàng tháng, bắt buộc):** GitHub ngừng giao job cho runner quá cũ. Từ [ARC 0.14.0](https://github.blog/changelog/2026-03-19-actions-runner-controller-release-0-14-0/), controller còn tắt autoscaling của scale set có runner quá cũ. Các bước:
+1. GitHub → Org → Settings → Actions → Runners: xoá các runner cũ đang Offline trong group `VN-Team`.
+2. Xoá LXC (Proxmox Shell):
+    ```bash
+    ids=$(pct list | awk '$NF ~ /^github-runner-/ && $2 == "stopped" { print $1 }')
+    echo "Sẽ xoá: $ids"; read -rp 'Gõ YES để xoá: ' ok
+    [ "$ok" = YES ] && for id in $ids; do pct destroy "$id" --purge --destroy-unreferenced-disks 1; done
+    pct list | awk '$NF ~ /^github-runner-/'      # không in gì là đã xoá hết
+    ```
+    Nếu một LXC báo lỗi `protection`, chạy `pct set <ID> --protection 0` rồi xoá lại.
+3. Chạy lại discovery (mục 6.3) rồi tăng `maxRunners` (mục 3).
+4. Cập nhật mục 1.8 và mục 2.
 
-1. Lấy `RUNNER_VERSION` mới và sửa tag trong `runner-values.yaml`.
-2. Kéo sẵn image mới lên các worker.
-3. `helm upgrade` với `-f ~/runner-values.yaml`.
+---
 
-Có thể dùng Renovate hoặc Dependabot để theo dõi `ghcr.io/actions/actions-runner`.
+## 8. Nâng cấp
 
-**Nâng cấp ARC:**
+- **ARC bản patch** (ví dụ 0.15.0 → 0.15.1): `helm upgrade` controller rồi đến scale set, dùng cùng version mới. Cập nhật `ARC_VERSION` trong `~/.bashrc` và mục 1.4.
+- **ARC bản minor** (ví dụ 0.15 → 0.16): Helm không nâng cấp CRD, nên làm theo thứ tự:
+    1. `--set maxRunners=0` rồi chờ về 0 pod.
+    2. `helm uninstall vn-gaqc-docker -n arc-runners`, rồi `helm uninstall arc -n arc-systems`.
+    3. Nếu bản mới đổi CRD: `kubectl get crd -o name | grep actions.github.com | xargs kubectl delete`.
+    4. Cài lại controller và scale set (mục 6.8) với version mới.
 
-- **Bản patch:** `helm upgrade` controller trước, rồi đến scale set, dùng cùng version.
-- **Bản minor:** Helm không nâng cấp CRD được, nên làm theo thứ tự:
-    1. Đặt `maxRunners=0` và chờ về 0 pod.
-    2. `helm uninstall vn-gaqc-docker -n arc-runners`.
-    3. `helm uninstall arc -n arc-systems`.
-    4. Nếu bản mới đổi CRD, chạy `kubectl get crd -o name | grep actions.github.com | xargs kubectl delete`.
-    5. Cài lại bước 6, rồi bước 7.
+    Trong lúc làm, job xếp hàng trên GitHub (tối đa 24 giờ).
+- **k3s**: nâng từng minor một, server trước, worker sau. Mỗi node làm theo quy trình cordon ở mục 3, rồi chạy lại lệnh cài với `INSTALL_K3S_VERSION` mới (`sh -s - server` hoặc `sh -s - agent`). Config giữ nguyên. Không dùng system-upgrade-controller kèm drain tự động, vì nó sẽ evict runner đang chạy job.
+- **Lên 3 server HA**: tạo thêm 2 VM bằng IP `.6`/`.7`. Dùng config giống server đầu, chỉ thay `cluster-init: true` bằng `server: "https://192.168.8.2:6443"`, rồi cài với `sh -s - server`.
 
-  Trong lúc nâng cấp, job xếp hàng trên GitHub (tối đa 24 giờ).
+---
 
-**Nâng cấp k3s:** nâng từng minor một, không nhảy cóc. Làm server trước, worker sau, và mỗi node đều làm theo quy trình cordon ở trên, rồi chạy lại lệnh cài với `INSTALL_K3S_VERSION` mới. Không dùng system-upgrade-controller kèm drain tự động, vì nó sẽ evict runner đang chạy job.
-
-**Thêm worker:**
-
-1. Thêm VMID và IP dự phòng vào `/root/k3s-plan.env`, ví dụ `WORKER_IDS="211 212 213"`, `WORKER_IPS="192.168.8.3 192.168.8.4 192.168.8.6"`.
-2. Chạy `pve-discovery.sh`, rồi `pve-create-vms.sh`. VM đã có sẽ được bỏ qua.
-3. Với worker mới, làm lại bước 2, ghi `registries.yaml` (4.2) và cài agent (3.3).
-
-Mỗi worker 8 vCPU / 16 GiB thêm khoảng 12 slot.
-
-## Theo dõi và xử lý sự cố
+## 9. Xử lý sự cố
 
 ```bash
 # k3s-server-1
-kubectl get autoscalingrunnerset,ephemeralrunners -n arc-runners
-kubectl top nodes; kubectl top pod -n arc-runners --containers | sort -k4 -h | tail
 kubectl get events -n arc-runners --sort-by=.lastTimestamp | tail -30
-kubectl logs -n arc-systems -f $(kubectl get pods -n arc-systems -o name | grep listener)   # listener
-kubectl logs -n arc-systems -f deploy/arc-gha-rs-controller                                 # controller
+kubectl logs -n arc-systems deploy/arc-gha-rs-controller --tail=50
+kubectl logs -n arc-runners <pod> -c runner --tail=50
+kubectl logs -n arc-runners <pod> -c dind --tail=30
 kubectl get pod -n arc-runners <pod> -o jsonpath='{range .status.containerStatuses[*]}{.name}{" "}{.lastState.terminated.reason}{"\n"}{end}'
-
 # Proxmox Shell
 ssh ubuntu@192.168.8.3 'sudo journalctl -u k3s-agent --since "1 hour ago" | tail -50; sudo dmesg -T | grep -iE "oom|killed process" | tail'
-dmesg -T | grep -iE 'oom|killed process' | tail      # host có kill VM vì hết RAM không
+dmesg -T | grep -iE 'oom|killed process' | tail          # host có kill VM vì hết RAM không
 ```
 
 | Triệu chứng | Nguyên nhân thường gặp | Xử lý |
 | --- | --- | --- |
-| Job "Waiting for a runner", không có pod | `runs-on` sai tên; repo không thuộc runner group; listener không chạy; runner LXC cũ còn đăng ký trên GitHub | So `runs-on` với `runnerScaleSetName`, xem runner group, log listener; xoá runner cũ Offline trên GitHub |
-| Listener `CrashLoopBackOff`, `401`/`403`/`404` | Sai App ID / Installation ID / private key, App thiếu quyền, node lệch giờ; sai `githubConfigUrl` | Bảng lỗi trong [docs/github-app.md](github-app.md#xử-lý-lỗi) |
-| Pod `Pending` | Thiếu CPU/RAM/disk trên worker | Giảm `maxRunners` hoặc thêm worker |
-| `EphemeralRunner` `Failed` | Pod lỗi khi khởi động | `kubectl describe ephemeralrunner <tên> -n arc-runners`, sửa lỗi rồi xoá nó |
-| `OOMKilled` | Job vượt RAM limit 2Gi | Tăng limit hoặc tách scale set riêng cho job nặng |
-| Pod `Evicted` vì ephemeral-storage | Vượt `sizeLimit` hoặc disk node đầy | Tăng `sizeLimit` hoặc disk worker |
-| `Cannot connect to the Docker daemon` | dind chưa sẵn sàng | `kubectl logs <pod> -c dind`; kiểm tra mount `/var/run` |
-| Docker rất chậm, log có `vfs` | Thiếu volume `dind-storage` | Thêm lại volume theo bước 7 |
-| `toomanyrequests` | Không đi qua mirror | Kiểm tra args dind, `registries.yaml`, `curl http://192.168.8.5:5000/v2/_catalog` |
-| `too many open files` | Giới hạn kernel mặc định | Chạy lại bước 2 |
-| `git clone`/`npm install` treo | MTU 1480, mất rule MSS (ví dụ sau reboot host) | `iptables -t mangle -S FORWARD \| grep TCPMSS`; kiểm tra `post-up` trong `/etc/network/interfaces` |
-| Nhiều job trên cùng worker chết, `lost communication with the server` | Node hết RAM/disk, VM bị pause, host Proxmox hết RAM | `kubectl describe node` (phần Conditions), Task log của Proxmox, `dmesg` trên host |
+| Job "Waiting for a runner", không có pod nào được tạo | `runs-on` khác `vn-gaqc-docker`; repo không thuộc group `VN-Team`; listener không chạy; runner LXC cũ vẫn còn đăng ký | So `runs-on`; xem Repository access của group; xem log listener; xoá runner Offline |
+| Job kẹt ở "about to start running" | Giao diện GitHub cập nhật chậm | Tải lại trang; xem `kubectl get ephemeralrunners -n arc-runners` |
+| Listener `401`/`403`/`404`, lỗi JWT | Sai App ID, Installation ID hoặc key; App thiếu quyền; node lệch giờ | [github-app.md, mục Xử lý lỗi](github-app.md#xử-lý-lỗi) |
+| Pod `Pending` | Thiếu CPU, RAM hoặc disk trên worker | Giảm `maxRunners` hoặc thêm worker |
+| `OOMKilled` | Job vượt RAM limit 2Gi | Tăng limit trong `runner-values.yaml` |
+| `Evicted` vì ephemeral-storage | Vượt `sizeLimit` hoặc disk node đầy | Tăng `sizeLimit` hoặc disk worker |
+| `Cannot connect to the Docker daemon` | dind chưa sẵn sàng | Xem log `dind`; kiểm tra mount `/var/run` |
+| `toomanyrequests` khi pull | Hạn mức ẩn danh của Docker Hub | Thêm tài khoản vào `mirror/config.yml`; kiểm tra `curl http://192.168.8.5:5000/v2/_catalog` |
+| `git clone`/`npm install` treo | Mất rule MSS (ví dụ sau khi reboot host) | `iptables -t mangle -S FORWARD \| grep TCPMSS`; kiểm tra `post-up` trong `/etc/network/interfaces` |
+| `too many open files` | Thiếu sysctl | Chạy lại `node-prep.sh` |
+| `kubectl` qua SSH báo `permission denied` | Thiếu `KUBECONFIG` trong `/etc/environment` | Mục 6.6 |
+| Nhiều job trên cùng worker chết với `lost communication` | Node hết RAM hoặc disk, VM bị pause, host hết RAM | `kubectl describe node` (phần Conditions), Task log của Proxmox, `dmesg` trên host |
 
-Nếu cần dashboard: cài `kube-prometheus-stack` (tốn khoảng 2–3 GiB RAM) và thu metrics ARC ở `:8080/metrics`. Nên cảnh báo khi: `gha_job_startup_duration_seconds` p95 vượt 120 giây, có runner failed, có OOMKilled, hoặc RAM/disk của worker còn dưới 10–20%.
+---
 
-## Checklist
-
-- [ ] `pve-discovery.sh` báo 0 FAIL; SSH key và Snippets đã có; NAT và MSS trên `vmbr1` đang chạy và đã ghi vào `/etc/network/interfaces`
-- [ ] `pve-create-vms.sh`: 4 VM lên SSH, xong cloud-init, ra được github.com
-- [ ] Bước 2 đã chạy trên 3 node; k3s có 3 node `Ready`; `kubectl`/`helm` chạy được trên server
-- [ ] Mirror chạy, `_catalog` có image
-- [ ] GitHub App đã tạo và cài vào org (checklist trong `docs/github-app.md`); runner group đúng repo; secret `github-app` đã tạo
-- [ ] ARC controller Running
-- [ ] Đã dừng LXC runner; scale set `vn-gaqc-docker` chạy; load test và workflow thật xanh
-- [ ] Đã dọn dẹp: runner cũ và LXC đã xoá, discovery chạy lại, `maxRunners` đã tăng
-- [ ] Có lịch cập nhật runner image hàng tháng; file cấu hình đã commit (không có secret)
-
-## Nguồn
+## 10. Nguồn
 
 - [GitHub Changelog – ARC 0.15.0](https://github.blog/changelog/2026-09-30-actions-runner-controller-release-0-15-0/)
 - [GitHub Changelog – ARC 0.14.0](https://github.blog/changelog/2026-03-19-actions-runner-controller-release-0-14-0/)

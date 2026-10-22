@@ -1,0 +1,21 @@
+# Values của Helm chart gha-runner-scale-set-controller (ARC), bản đang cài trên cụm.
+# Cài/nâng cấp (trên k3s-server-1):
+#   helm upgrade --install arc -n arc-systems --create-namespace -f controller-values.yaml \
+#     --version "$ARC_VERSION" oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set-controller
+# Đang dùng ARC_VERSION=0.15.0 (2026-10-22).
+replicaCount: 1
+resources:
+  requests: { cpu: 100m, memory: 256Mi }
+  limits: { memory: 1Gi }
+flags:
+  logLevel: "info"
+metrics:
+  controllerManagerAddr: ":8080"
+  listenerAddr: ":8080"
+  listenerEndpoint: "/metrics"
+# Chạy trên k3s-server-1: không để credential GitHub nằm trên worker có job privileged
+nodeSelector:
+  node-role.kubernetes.io/control-plane: "true"
+tolerations:
+  - key: CriticalAddonsOnly
+    operator: Exists

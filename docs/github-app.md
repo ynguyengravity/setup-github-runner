@@ -1,6 +1,6 @@
 # GitHub App cho ARC runner (`vn-gaqc-docker`)
 
-Actions Runner Controller (ARC) trong cụm k3s dùng một GitHub App để đăng ký và quản lý self-hosted runner của org. Tài liệu này mô tả App cần tạo, các giá trị cần lấy, và cách dùng chúng trong project này. Các bước dựng cụm nằm trong [proxmox-k3s-arc-guide.md](proxmox-k3s-arc-guide.md); file này thay cho bước 5.1 và 5.3 ở đó.
+Actions Runner Controller (ARC) trong cụm k3s dùng một GitHub App để đăng ký và quản lý self-hosted runner của org. Tài liệu này mô tả App cần tạo, các giá trị cần lấy, và cách dùng chúng trong project này. Các bước dựng cụm nằm trong [proxmox-k3s-arc-guide.md](proxmox-k3s-arc-guide.md); file này mô tả chi tiết phần GitHub App của mục 6.8 trong guide.
 
 ## Dùng App có sẵn `gravityactionvn`
 
@@ -22,9 +22,13 @@ Kiểm tra trước khi dùng (chỉ xem, không sửa):
 
 1. **Quyền:** tab **Permissions & events** phải có Organization permissions → `Self-hosted runners` = **Read and write**. Nếu chưa có, phải thêm quyền. Thêm quyền sẽ áp dụng cho mọi hệ thống đang dùng App này và cần Owner chấp nhận ở trang installation. Hãy báo người quản lý App trước khi đổi.
 2. **Đã cài vào org:** Org → Settings → GitHub Apps phải có `gravityactionvn`. Repository access phải là All repositories, hoặc gồm đủ các repo dùng `vn-gaqc-docker`.
-3. **Ai khác đang dùng App:** các runner LXC cũ rất có thể đăng ký qua chính App này. Nếu ai đó xoá key, đổi quyền hay gỡ App, runner ARC cũng sẽ dừng theo. Hãy cho người quản lý App biết ARC cũng dùng App này, kèm fingerprint của key ARC.
+3. **Ai khác đang dùng App:** App `gravityactionvn` có thể còn được hệ thống khác dùng (runner LXC cũ thì không: chúng đăng ký bằng PAT `admin:org`, xem guide mục 1.8). Nếu ai đó xoá key, đổi quyền hay gỡ App, runner ARC sẽ dừng theo. Hãy cho người quản lý App biết ARC đang dùng App này, kèm fingerprint của key ARC.
 
-Trạng thái đã kiểm tra (2026-10-22): App có `Self-hosted runners` = **Read and write**, Repository access là **All repositories**. ARC dùng được ngay.
+Trạng thái (2026-10-22):
+
+- App có `Self-hosted runners` = **Read and write**; Repository access là **All repositories**.
+- Đã tạo private key riêng cho ARC, fingerprint **`SHA256:HIWdluCnKDj2e85r2D5+LlbprcdZyt0d/LXvhydrvas=`**. File `.pem` lưu trong password manager và nằm trong secret `github-app` (namespace `arc-runners`). File gốc đã xoá khỏi server và máy cá nhân.
+- Listener đã xác thực thành công (lấy được installation token và registration token của org) và đang nhận job.
 
 ### Rủi ro khi dùng App này
 
@@ -88,7 +92,7 @@ Chỉ khi đăng ký runner ở cấp **repo** (không phải org) mới cần t
    - Hoặc **Only select repositories**: khi đó phải chọn **đủ mọi repo đang dùng `runs-on: vn-gaqc-docker`**.
 5. Sau khi cài xong, URL trên trình duyệt có dạng `https://github.com/organizations/Gravity-Global/settings/installations/<INSTALLATION_ID>`. Ghi lại số ở cuối URL.
 
-Repo nào được phép dùng runner thì quyết định ở **runner group** (bước 5.2 của guide), không phải ở chỗ chọn repo khi cài App.
+Repo nào được phép dùng runner thì quyết định ở **runner group** (`VN-Team`), không phải ở chỗ chọn repo khi cài App.
 
 ## Giá trị cần lấy
 
@@ -102,7 +106,7 @@ Lưu cả 3 giá trị vào password manager. **Không** đưa file `.pem` vào 
 
 ## Dùng trong project này
 
-### 1. Tạo secret trong cụm (thay cho bước 5.3 của guide)
+### 1. Tạo secret trong cụm (guide, mục 6.8)
 
 Các lệnh dưới đây chạy trên `k3s-server-1`. Từ Proxmox Shell, vào server bằng `ssh ubuntu@192.168.8.2`.
 
@@ -131,7 +135,7 @@ shred -u ~/arc-app.pem
 
 Sau đó xoá luôn file `.pem` trong thư mục Downloads trên máy bạn, vì bản gốc đã nằm trong password manager.
 
-### 2. Trỏ scale set tới secret (bước 7 của guide)
+### 2. Trỏ scale set tới secret ([k8s/runner-values.yaml](../k8s/runner-values.yaml))
 
 Trong `~/runner-values.yaml`:
 
@@ -144,7 +148,7 @@ Secret phải nằm cùng namespace với scale set, ở đây là `arc-runners`
 
 ### 3. Kiểm tra
 
-Sau khi `helm install vn-gaqc-docker` (bước 7):
+Sau khi `helm install vn-gaqc-docker` (guide, mục 6.8):
 
 ```bash
 kubectl get pods -n arc-systems | grep listener        # Running
@@ -160,7 +164,7 @@ Trên GitHub, mở Org → Settings → Actions → Runners. Scale set `vn-gaqc-
 3. Dùng installation token để đăng ký scale set, long-poll lấy job và tạo JIT config cho từng runner.
 4. Gần hết giờ thì ARC tự lặp lại các bước trên. Bạn không phải làm gì.
 
-JWT có thời gian phát hành và hết hạn, nên **đồng hồ của node phải đúng**. Guide đã cài `chrony` trên mọi VM ở bước 1–2. Nếu node lệch giờ, listener sẽ báo lỗi JWT (xem phần Xử lý lỗi).
+JWT có thời gian phát hành và hết hạn, nên **đồng hồ của node phải đúng**. Guide đã cài `chrony` trên mọi VM (snippet cloud-init và `node-prep.sh`). Nếu node lệch giờ, listener sẽ báo lỗi JWT (xem phần Xử lý lỗi).
 
 ## Bảo trì
 

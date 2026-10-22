@@ -1,0 +1,120 @@
+# Values của Helm chart gha-runner-scale-set (scale set vn-gaqc-docker), bản đang cài trên cụm.
+# Cài/nâng cấp (trên k3s-server-1):
+#   helm upgrade --install vn-gaqc-docker -n arc-runners -f runner-values.yaml \
+#     --version "$ARC_VERSION" oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set
+# Đổi runner version: sửa cả 2 dòng ghcr.io/actions/actions-runner:<version> rồi helm upgrade.
+# Secret github-app (App gravityactionvn) phải có sẵn trong namespace arc-runners.
+githubConfigUrl: "https://github.com/Gravity-Global"
+githubConfigSecret: github-app
+
+runnerScaleSetName: "vn-gaqc-docker"   # = runs-on của workflow
+runnerGroup: "VN-Team"                 # group của runner LXC cũ
+
+minRunners: 0
+maxRunners: 8                          # tăng dần sau khi gỡ LXC cũ (xem guide, mục Cheat sheet)
+
+controllerServiceAccount:
+  namespace: arc-systems
+  name: arc-gha-rs-controller
+
+# Listener giữ credential GitHub: chạy trên k3s-server-1, không chung node với job privileged
+listenerTemplate:
+  spec:
+    nodeSelector:
+      node-role.kubernetes.io/control-plane: "true"
+    tolerations:
+      - key: CriticalAddonsOnly
+        operator: Exists
+    containers:
+      - name: listener
+
+template:
+  spec:
+    nodeSelector:
+      gha-runner: "true"
+    topologySpreadConstraints:
+      - maxSkew: 2
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            actions.github.com/scale-set-name: vn-gaqc-docker   # luôn trùng runnerScaleSetName
+    initContainers:
+      - name: init-dind-externals
+        image: ghcr.io/actions/actions-runner:2.338.1
+        command: ["cp", "-r", "/home/runner/externals/.", "/home/runner/tmpDir/"]
+        volumeMounts:
+          - name: dind-externals
+            mountPath: /home/runner/tmpDir
+      # `docker compose` cho job: image runner chuẩn chỉ có buildx. Lấy plugin compose từ image
+      # docker:dind (đã có sẵn trên node), mount vào thư mục plugin mà runner image để trống.
+      - name: init-compose-plugin
+        image: docker:dind
+        command: ["sh", "-c", "cp /usr/local/libexec/docker/cli-plugins/docker-compose /plugins/ && /plugins/docker-compose version"]
+        volumeMounts:
+          - name: docker-plugins
+            mountPath: /plugins
+      # Docker daemon riêng của pod, chạy dạng native sidecar
+      - name: dind
+        image: docker:dind
+        restartPolicy: Always
+        args:
+          - dockerd
+          - --host=unix:///var/run/docker.sock
+          - --group=$(DOCKER_GROUP_GID)
+          - --registry-mirror=http://192.168.8.5:5000
+          - --insecure-registry=192.168.8.5:5000
+        env:
+          - name: DOCKER_GROUP_GID
+            value: "123"
+        securityContext:
+          privileged: true
+        startupProbe:
+          exec:
+            command: ["docker", "info"]
+          failureThreshold: 24
+          periodSeconds: 5
+        resources:
+          requests: { cpu: 250m, memory: 512Mi, ephemeral-storage: 4Gi }
+          limits: { memory: 2Gi }
+        volumeMounts:
+          - name: work
+            mountPath: /home/runner/_work
+          - name: dind-sock
+            mountPath: /var/run
+          - name: dind-externals
+            mountPath: /home/runner/externals
+          - name: dind-storage
+            mountPath: /var/lib/docker
+    containers:
+      - name: runner
+        image: ghcr.io/actions/actions-runner:2.338.1
+        imagePullPolicy: IfNotPresent
+        command: ["/home/runner/run.sh"]
+        env:
+          - name: DOCKER_HOST
+            value: unix:///var/run/docker.sock
+          - name: RUNNER_WAIT_FOR_DOCKER_IN_SECONDS
+            value: "120"
+        resources:
+          requests: { cpu: 250m, memory: 512Mi, ephemeral-storage: 2Gi }
+          limits: { memory: 2Gi }
+        volumeMounts:
+          - name: work
+            mountPath: /home/runner/_work
+          - name: dind-sock
+            mountPath: /var/run
+          - name: docker-plugins
+            mountPath: /usr/local/libexec/docker/cli-plugins
+            readOnly: true
+    volumes:
+      - name: work
+        emptyDir: { sizeLimit: 10Gi }
+      - name: dind-sock
+        emptyDir: {}
+      - name: dind-externals
+        emptyDir: {}
+      - name: dind-storage
+        emptyDir: { sizeLimit: 20Gi }
+      - name: docker-plugins
+        emptyDir: {}
