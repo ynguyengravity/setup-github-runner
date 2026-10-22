@@ -19,7 +19,10 @@ Tài liệu liên quan:
 
 - **Trạng thái:** đang chạy production cho `runs-on: vn-gaqc-docker` từ 2026-10-22 khoảng 15:00 UTC. Đã chạy thật job `SonarQube-Scan` của repo `gg-ai-command-center-app`.
 - **Quy mô:** `minRunners: 0`, `maxRunners: 18` (phương án A, 2026-10-22), mỗi pod request 1 CPU. Mỗi job chạy trong một pod riêng, xong job thì pod bị xoá. Giới hạn thật là CPU của host (mục 1.9).
-- **Tương thích với LXC cũ** (áp dụng và xác nhận ngày 2026-10-22): job chạy bằng root, `sudo` dùng được, có `docker compose`. Repo `gravity-jenkins-automation-screenshot-v2-10-2023` đã tự cài browser và load được site. Tuy nhiên, bước "Install browsers" mất khoảng **4 phút mỗi job**, vì image chưa có sẵn browser (xem TODO).
+- **Tương thích với LXC cũ:**
+    - 2026-10-22: job chạy bằng root, `sudo` dùng được, có `docker compose`. Các job screenshot, check-console và SonarQube đều chạy được.
+    - Lúc đó image chuẩn chưa có browser, nên bước "Install browsers" mất khoảng 6 phút mỗi job.
+    - 2026-10-23: đã build image nội bộ `vn-gaqc-runner` có sẵn browser (mục 1.4). Bước tiếp theo là `helm upgrade` sang image này và đo lại thời gian job (TODO).
 - **Runner LXC cũ:** đã xoá hết (111–135 và 100–110) ngày 2026-10-22. Không còn đường quay lại hệ thống cũ.
 
 ```mermaid
@@ -146,7 +149,7 @@ Các LXC này được tạo bởi script cũ, nằm trên branch `master` của
 - Runner chạy bằng **root** (`RUNNER_ALLOW_RUNASROOT=1`, `svc.sh install root`), `LANG/LC_ALL=en_US.UTF-8`.
 - Công cụ cài sẵn: Chrome, Edge, Firefox (PPA), Xvfb và thư viện đồ hoạ; Node.js 24 + npm; Playwright (global, có deps và browser); OpenVPN, net-tools, iptables, iproute2; Docker (`get.docker.com`, có `docker compose`); AWS CLI v2; git, curl, unzip.
 
-Image `ghcr.io/actions/actions-runner` của ARC không có các công cụ trên (riêng `docker compose` đã được bổ sung qua init container), mặc định chạy bằng user `runner` (cụm đã cấu hình chạy root như LXC cũ) và không có `NET_ADMIN`/`tun`. Workflow nào tự cài thứ mình cần (ví dụ job screenshot tự cài browser) thì chạy được ngay. Nếu nhiều workflow cần sẵn browser, Playwright, AWS CLI hay OpenVPN, dùng image tương đương LXC cũ ở [runner-image/Dockerfile](../runner-image/Dockerfile) (bản nháp, chưa build).
+Image `ghcr.io/actions/actions-runner` của ARC không có các công cụ trên (riêng `docker compose` đã được bổ sung qua init container), mặc định chạy bằng user `runner` (cụm đã cấu hình chạy root như LXC cũ) và không có `NET_ADMIN`/`tun`. Workflow nào tự cài thứ mình cần (ví dụ job screenshot tự cài browser) thì chạy được ngay. Image `vn-gaqc-runner` ([runner-image/Dockerfile](../runner-image/Dockerfile), build ngày 2026-10-23) bổ sung đủ các công cụ của LXC cũ, trừ quyền `NET_ADMIN`/`tun` cho OpenVPN. Quyền đó cần thêm vào pod nếu có workflow dùng VPN.
 
 ### 1.9 CPU host và giới hạn số runner
 
@@ -186,7 +189,10 @@ RAM (còn trống khoảng 185 GiB) và disk (`local-lvm2` còn khoảng 2392 GB
 - [ ] Báo người quản lý App `gravityactionvn` rằng ARC đang dùng key có fingerprint ở mục 1.5.
 - [ ] Cân nhắc tạo App riêng chỉ có quyền `Self-hosted runners` để giảm rủi ro ([github-app.md](github-app.md)).
 - [ ] Đặt lịch hằng tháng cập nhật runner image, và hằng năm đổi private key.
-- [ ] Build image `vn-gaqc-runner` (có sẵn browser, Node, Playwright, AWS CLI, `docker compose`, dòng `root` trong sudoers) bằng [runner-image/build.sh](../runner-image/build.sh). Image chỉ nằm ở registry nội bộ `192.168.8.5:5001`, không đưa lên ghcr. Mục tiêu: bỏ khoảng 6 phút cài browser ở mỗi job (run screenshot: khoảng 8 phút/job, 73 job, `max-parallel: 10`). Chạy ổn rồi thì bỏ ConfigMap `runner-sudoers` và init container compose.
+- [x] Registry nội bộ `192.168.8.5:5001` (service `registry-local` trên VM mirror) và `registries.yaml` mới trên 3 node (2026-10-23).
+- [x] Build image `192.168.8.5:5001/vn-gaqc-runner:2.338.1-202610230022` bằng [runner-image/build.sh](../runner-image/build.sh), đã kéo sẵn về 2 worker (2026-10-23). Image chỉ nằm trong mạng nội bộ, không đưa lên ghcr.
+- [ ] `helm upgrade` scale set sang image mới, kiểm tra trong pod (`google-chrome --version`, `sudo -n true`, `docker compose version`), chạy lại run screenshot và so thời gian (trước đó: khoảng 8 phút/job, riêng Install browsers khoảng 6 phút, 73 job với `max-parallel: 10`).
+- [ ] Sau vài run ổn định: bỏ ConfigMap `runner-sudoers` và init container compose khỏi `runner-values.yaml`, vì image đã có sẵn cả hai.
 - [ ] (Repo screenshot) Cân nhắc tăng `max-parallel` từ 10 lên 16–18 để dùng hết sức chứa của cụm.
 - [ ] (Tuỳ chọn) Pin `docker:dind` theo major, gắn monitoring (Prometheus) và cảnh báo.
 
@@ -561,13 +567,17 @@ kubectl get crd | grep actions.github.com          # 4 CRD
 curl -fsSL "$BASE/k8s/runner-sudoers.yaml" | kubectl apply -f -
 ```
 
-**Kéo sẵn image runner** (Proxmox Shell). Dùng đúng version trong `runner-values.yaml`:
+**Build image runner `vn-gaqc-runner`** (Proxmox Shell). Script build trên VM mirror, push vào registry nội bộ `192.168.8.5:5001`, rồi kéo sẵn về worker. Mất khoảng 10–25 phút.
 
 ```bash
-for ip in 192.168.8.3 192.168.8.4; do
-  ssh ubuntu@$ip "sudo k3s crictl pull ghcr.io/actions/actions-runner:2.338.1 && sudo k3s crictl pull docker.io/library/docker:dind"
-done
+mkdir -p /root/selfhost-auto-scale/runner-image && cd /root/selfhost-auto-scale/runner-image
+curl -fsSL "$BASE/runner-image/Dockerfile" -o Dockerfile
+curl -fsSL "$BASE/runner-image/build.sh"   -o build.sh
+bash build.sh                                   # in ra tag mới, ví dụ 192.168.8.5:5001/vn-gaqc-runner:2.338.1-<thời gian>
+for ip in 192.168.8.3 192.168.8.4; do ssh ubuntu@$ip "sudo k3s crictl pull docker.io/library/docker:dind"; done
 ```
+
+Sửa 2 dòng `image:` trong `~/runner-values.yaml` thành tag vừa in ra; `build.sh` có in sẵn lệnh `sed` cho việc này. Nếu không build image riêng, có thể dùng thẳng `ghcr.io/actions/actions-runner:<version>`: job vẫn chạy được, chỉ phải tự cài browser ở mỗi job.
 
 **Scale set** (trên `k3s-server-1`). Lần đầu cài, các runner LXC cũ đã được dừng trước (mục 7):
 
