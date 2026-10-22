@@ -165,7 +165,7 @@ DHCP_RANGES=$(while read -r line; do
   read -r a b _ <<<"$(grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' <<<"$line" | tr '\n' ' ')"
   [[ -n ${a:-} ]] && echo "$(ip2int "$a") $(ip2int "${b:-$a}")"
 done <<<"$ranges")
-[[ -n $DHCP_RANGES ]] && info "Dải DHCP trên host: $(tr '\n' ';' <<<"$ranges" | tr -s ' ')"
+[[ -n $DHCP_RANGES ]] && info "Dải DHCP trên host: $(sed -E "s/^[[:space:]]*//; s/;[[:space:]]*$//" <<<"$ranges" | paste -sd "|" -)"
 
 # DNS cho VM
 if [[ -z $NAMESERVER ]]; then
