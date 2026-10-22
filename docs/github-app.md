@@ -39,6 +39,16 @@ Trạng thái (2026-10-22):
 
 Phần "Thông số App" bên dưới dùng để đối chiếu cấu hình, hoặc khi tạo App riêng.
 
+### Lịch sử
+
+| Ngày | Việc | Người làm |
+| --- | --- | --- |
+| 2026-10-22 | Kiểm tra App `gravityactionvn`: App ID `1192728`, Installation ID `63354448`, quyền `Self-hosted runners` = Read and write, Repository access = All repositories | `ynguyengravity` |
+| 2026-10-22 | Tạo private key riêng cho ARC (fingerprint `SHA256:HIWdluCnKDj2e85r2D5+LlbprcdZyt0d/LXvhydrvas=`); kiểm tra fingerprint trên server rồi tạo secret `github-app`; xoá file `.pem` khỏi server bằng `shred` | `ynguyengravity` |
+| 2026-10-22 | Listener xác thực thành công và nhận job đầu tiên (SonarQube) | |
+
+Runner LXC cũ không dùng App này: chúng đăng ký bằng PAT `admin:org` (script `lxc_create_github_actions_runner.clone.sh` trên branch `master`).
+
 ## Vì sao dùng GitHub App thay cho PAT
 
 | | GitHub App | Personal Access Token |

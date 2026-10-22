@@ -175,6 +175,48 @@ Muốn chạy nhiều hơn thì có các hướng (mục 2, TODO):
 
 RAM (còn trống khoảng 185 GiB) và disk (`local-lvm2` còn khoảng 2392 GB sau khi xoá LXC) đều không phải giới hạn.
 
+### 1.10 Repo và workflow đang dùng runner
+
+Mọi workflow dùng `runs-on: vn-gaqc-docker`, nên không phải sửa gì khi đổi hạ tầng. Dưới đây là các workflow đã chạy thật trên cụm và những điểm cần biết khi chúng lỗi.
+
+| Repo | Workflow / job | Đặc thù | Đã kiểm tra |
+| --- | --- | --- | --- |
+| `Gravity-Global/gg-ai-command-center-app` | `quality-gate.yml` → reusable `Gravity-Global/gravity-workflows-github-action-vn-team/.github/workflows/sonarqube-quality-gate.yml@production`, job `SonarQubeQualityGateCheck / SonarQube-Scan` | Job nhẹ, chạy ngay khi cài scale set (2 job đầu tiên) | 2026-10-22 ✅ |
+| `Gravity-Global/gravity-jenkins-automation-screenshot-v2-10-2023` | `.github/workflows/tool.excel.sharepoint.template.yml`, các job `prepare`, `process-chunks (N)` | `NUMBER_OF_CHUNKS: 100` (khoảng 73 job/run), `max-parallel: ${{ inputs.runOnExternal && 100 \|\| 10 }}`. Các bước: Setup Hosts → Setup Node.js (18) → Cache `node_modules` → **Install browsers** (`.github/scripts/setup-browsers.sh`: gọi `apt`/`apt-key` **không có sudo**, có `\|\| true` nên lỗi vẫn báo xanh) → Download artifact → `npm run step4-process-chunk N` (Selenium + Chrome local, BrowserStack Local, upload S3 `9w-internal-screenshot`). Secret: AWS, BrowserStack | 2026-10-22 ✅. Khoảng 8 phút/job, riêng Install browsers khoảng 6 phút khi chưa có image có sẵn browser |
+| `Gravity-Global/gravity-jenkins-automation-check-console-04-2022` | `.github/workflows/tool.excel.sharepoint.template.yml`: `prepare-and-chunk` (trên `ubuntu-latest`), `process-chunks` và `merge-upload-summary` (trên `vn-gaqc-docker`) | `max-parallel: 10`. **Dùng `docker compose`**: service `crawler` = `mcr.microsoft.com/playwright:v1.63.0-noble`, `network_mode: host`, mount `.:/app` và `/etc/hosts:/etc/hosts:ro`. Bước xử lý chạy Xvfb + Chrome **có giao diện** (`--headless false`) bên trong dind | 2026-10-22 ✅ |
+
+Các điểm dùng chung giữa các workflow:
+
+- **Action `Gravity-Global/shared-github-actions/setup-hosts@production`:** ghi khối `# BEGIN VN_HOST … # END VN_HOST` (lấy từ biến org `vars.VN_HOST`, gồm danh sách site staging) vào `/etc/hosts`, dùng `sudo` nếu có. Vì vậy container runner phải chạy được `sudo` (ConfigMap `runner-sudoers`, hoặc dòng `root` trong image `vn-gaqc-runner`).
+- **Input `runOnExternal`** của 2 workflow jenkins: khi bật, job chạy trên `ubuntu-latest` của GitHub (tốn phút Actions) và `max-parallel` lên 100. Đây là cách xả tải khi cần chạy nhiều hơn khoảng 18 job cùng lúc.
+- **Kế thừa từ LXC cũ:** các workflow giả định chạy bằng root và có sẵn `docker compose` (mục 1.8).
+
+### 1.11 Mạng bên trong runner pod
+
+Mỗi pod có 2 container chính: `runner` (chạy các step của job) và `dind` (Docker daemon riêng). Hai container dùng chung một network namespace và chung các volume.
+
+- **`/etc/hosts`:** kubelet tạo một file hosts cho mỗi pod và mount file đó vào mọi container trong pod. Khi `setup-hosts` sửa `/etc/hosts` trong container runner, dind cũng thấy thay đổi. Container mà job chạy bằng `docker compose` (mount `/etc/hosts` của dind) cũng thấy theo. Nhờ vậy check-console phân giải được các site staging.
+- **`network_mode: host`** trong compose nghĩa là dùng network của pod, không phải của worker. Container đó có IP pod (`10.42.x.x`), ra Internet qua NAT của node rồi NAT của Proxmox host.
+- **DNS:** pod dùng CoreDNS của k3s. CoreDNS chuyển tiếp ra DNS của node (`10.128.6.2`, `8.8.8.8`, do cloud-init cấu hình).
+- **Thư mục làm việc:** `/home/runner/_work` là `emptyDir` dùng chung giữa runner và dind. Nhờ đó bind mount `.:/app` của compose trỏ đúng vào code đã checkout.
+- **Kéo image:** `docker pull` bên trong job đi qua `--registry-mirror` của dind (`192.168.8.5:5000`). Image của pod (runner, dind) do containerd của node kéo theo `registries.yaml`.
+
+### 1.12 Lịch sử thay đổi
+
+| Thời gian | Thay đổi |
+| --- | --- |
+| 2026-10-22 | Chạy discovery nhiều lần; đổi kế hoạch IP sang `192.168.8.2`–`.5` (ngoài dải DHCP); bật Snippets; tạo SSH key trên host; thêm MSS clamp 1440 |
+| 2026-10-22 | Xoá LXC 111–135 (đã dừng sẵn): `local-lvm2` tăng từ khoảng 348 GB lên 1762 GB trống |
+| 2026-10-22 | `pve-create-vms.sh` tạo template 9000 và VM 201, 211, 212, 220; chạy `node-prep.sh`; cài k3s v1.36.5+k3s1 (3 node); dựng registry mirror |
+| 2026-10-22 | Tạo private key ARC cho App `gravityactionvn`; tạo secret `github-app`; cài ARC controller 0.15.0 |
+| 2026-10-22, khoảng 15:00 UTC | Dừng LXC 100–110; cài scale set `vn-gaqc-docker` (min 0, max 8). Nhận ngay 2 job SonarQube |
+| 2026-10-22 | Sửa tương thích: init container `docker compose`; chạy root (`runAsUser: 0`, `RUNNER_ALLOW_RUNASROOT=1`); ConfigMap `runner-sudoers`. Job screenshot và check-console chạy được |
+| 2026-10-22 | Xoá LXC 100–110 (hết runner cũ): `local-lvm2` lên 2392 GB trống. CPU host vẫn bận khoảng 69%, chủ yếu do `Maintain-Local` và job của cụm (mục 1.9) |
+| 2026-10-22, khoảng 16:52 UTC | Phương án A: `resize-worker.sh` nâng 211/212 lên 10 vCPU; request 1 CPU/pod; `maxRunners: 18` (Helm revision 5) |
+| 2026-10-23 | Thêm `registry-local` (cổng 5001) trên VM mirror và `registries.yaml` mới trên 3 node; build image `vn-gaqc-runner:2.338.1-202610230022` |
+
+Xem lịch sử Helm: `helm history vn-gaqc-docker -n arc-runners` và `helm history arc -n arc-systems`.
+
 ---
 
 ## 2. Việc còn lại (TODO)
@@ -189,6 +231,8 @@ RAM (còn trống khoảng 185 GiB) và disk (`local-lvm2` còn khoảng 2392 GB
 - [ ] Báo người quản lý App `gravityactionvn` rằng ARC đang dùng key có fingerprint ở mục 1.5.
 - [ ] Cân nhắc tạo App riêng chỉ có quyền `Self-hosted runners` để giảm rủi ro ([github-app.md](github-app.md)).
 - [ ] Đặt lịch hằng tháng cập nhật runner image, và hằng năm đổi private key.
+- [ ] Sao lưu snapshot etcd ra ngoài VM 201 (mục 9.2): hiện snapshot chỉ nằm trên chính disk của server.
+- [ ] Ghi lại người quản lý App `gravityactionvn` và người có quyền Owner của org vào mục 1.5.
 - [x] Registry nội bộ `192.168.8.5:5001` (service `registry-local` trên VM mirror) và `registries.yaml` mới trên 3 node (2026-10-23).
 - [x] Build image `192.168.8.5:5001/vn-gaqc-runner:2.338.1-202610230022` bằng [runner-image/build.sh](../runner-image/build.sh), đã kéo sẵn về 2 worker (2026-10-23). Image chỉ nằm trong mạng nội bộ, không đưa lên ghcr.
 - [ ] `helm upgrade` scale set sang image mới, kiểm tra trong pod (`google-chrome --version`, `sudo -n true`, `docker compose version`), chạy lại run screenshot và so thời gian (trước đó: khoảng 8 phút/job, riêng Install browsers khoảng 6 phút, 73 job với `max-parallel: 10`).
@@ -282,6 +326,41 @@ ssh ubuntu@192.168.8.2 'kubectl get nodes; kubectl get pods -n arc-systems'
 ssh ubuntu@192.168.8.5 'cd /opt/mirror && sudo docker compose ps'   # restart: unless-stopped
 ```
 
+**Đo CPU/RAM thật của từng VM** (Proxmox Shell). Dùng để quyết định `maxRunners`; nên đo cả lúc có job và lúc rảnh:
+
+```bash
+pvesh get /cluster/resources --type vm --output-format json | python3 -c '
+import json,sys
+d=[v for v in json.load(sys.stdin) if v.get("status")=="running" and v.get("type")=="qemu"]
+d.sort(key=lambda v:-v.get("cpu",0)*v.get("maxcpu",0))
+k3s={201,211,212,220}; s={"k3s":0,"khác":0}
+for v in d:
+    t=v.get("cpu",0)*v.get("maxcpu",0); s["k3s" if v["vmid"] in k3s else "khác"]+=t
+    print(f"{v["vmid"]:>5} {v.get("name",""):<18} {t:5.1f} thread /{v.get("maxcpu",0):>3} vCPU  RAM {v.get("mem",0)/2**30:5.1f}/{v.get("maxmem",0)/2**30:5.1f} GiB")
+print(f"Cụm k3s: {s["k3s"]:.1f} | VM khác: {s["khác"]:.1f} | tổng {sum(s.values()):.1f}/32 thread")'
+ssh ubuntu@192.168.8.2 'kubectl get pods -n arc-runners --no-headers | wc -l; kubectl top nodes'
+```
+
+**Đọc log job GitHub từ máy có `gh`** (đăng nhập `gh auth login`; đây là cách đã dùng để tìm lỗi compose, browser và sudoers). Log chỉ tải được khi job đã chạy xong:
+
+```bash
+R=Gravity-Global/<repo>; J=<job-id>        # job-id là số cuối trong URL .../job/<id>
+gh api repos/$R/actions/jobs/$J --jq '{status,conclusion,runner_name,steps:[.steps[]|"\(.number) \(.conclusion // .status) \(.name)"]}'
+curl -fsSL -H "Authorization: Bearer $(gh auth token)" https://api.github.com/repos/$R/actions/jobs/$J/logs \
+  | sed -E 's/\x1b\[[0-9;]*m//g' | grep -nE '##\[group\]Run|##\[error\]' | head
+# Tổng hợp cả run: số job theo trạng thái
+gh api --paginate "repos/$R/actions/runs/<run-id>/jobs?per_page=100" --jq '.jobs[] | "\(.status)/\(.conclusion)"' | sort | uniq -c
+```
+
+**Lịch sử và rollback Helm** (trên `k3s-server-1`):
+
+```bash
+helm history vn-gaqc-docker -n arc-runners
+helm rollback vn-gaqc-docker <REVISION> -n arc-runners     # quay về revision trước nếu bản mới lỗi
+```
+
+Rollback chỉ đổi cấu hình scale set. Nếu bản lỗi còn liên quan tới ConfigMap hoặc secret, sửa riêng các thứ đó. Sau khi rollback, cập nhật `~/runner-values.yaml` và [k8s/runner-values.yaml](../k8s/runner-values.yaml) cho khớp.
+
 **Đổi vCPU / RAM / disk của worker** (cordon, chờ hết job, reboot, rồi uncordon):
 
 ```bash
@@ -324,6 +403,16 @@ Mỗi worker 8 vCPU / 16 GiB thêm khoảng 10–12 slot. Cập nhật mục 1.3
 | Embedded etcd (`cluster-init`) | Sau này nâng lên 3 server HA mà không phải cài lại | SQLite |
 
 Request/limit của mỗi runner pod: runner 250m CPU / 512Mi (limit 2Gi), dind 250m / 512Mi (limit 2Gi). Không đặt CPU limit. `emptyDir`: work 10Gi, Docker 20Gi. Sau khoảng 1 tuần chạy thật, chỉnh request về mức dùng p90 (`kubectl top pod -n arc-runners --containers`).
+
+### Rủi ro bảo mật đã chấp nhận
+
+| Rủi ro | Vì sao chấp nhận | Giảm thiểu đang có / có thể làm |
+| --- | --- | --- |
+| Private key của App `gravityactionvn` (quyền rộng: code, admin, workflows trên mọi repo) nằm trong cụm | Dùng App có sẵn cho nhanh | Controller và listener chỉ chạy trên server; runner (privileged) chỉ chạy trên worker. Có thể làm thêm: tạo App riêng chỉ có `Self-hosted runners` |
+| dind chạy privileged; job chạy bằng root | Giống LXC cũ (LXC privileged, runner root); workflow cần `docker compose` và `apt` | Cụm nằm trên `vmbr1`, tách khỏi LAN; runner group `VN-Team` chỉ gồm repo nội bộ, không cho public repo |
+| Mirror và registry nội bộ không có xác thực | Chỉ truy cập được trong `vmbr1` | Không NAT hay port-forward cổng 5000/5001 ra ngoài |
+| `vmbr1` dùng chung với các VM khác (`Cullat*`, `Maintain-Local`, máy nhận DHCP `192.168.11.x`) | Hạ tầng sẵn có | Có thể làm thêm: đặt cụm vào VLAN hoặc bridge riêng |
+| Repo `ynguyengravity/setup-github-runner` public, guide có thông tin hạ tầng (IP, tên host, App ID, fingerprint) | Không có secret trong repo; tiện cho `curl` | Chuyển repo sang private nếu cần; khi đó `curl` cần token |
 
 ---
 
@@ -694,7 +783,57 @@ pct list | awk 'NR == 1 || $NF ~ /^github-runner-/'
 
 ---
 
-## 9. Xử lý sự cố
+## 9. Khôi phục khi có sự cố lớn
+
+Có thể dựng lại toàn bộ cụm chỉ từ repo cộng các secret trong password manager (mục 1.7): mọi cấu hình đều nằm trong `scripts/`, `k8s/`, `mirror/`, `runner-image/` và mục 6. Job đang xếp hàng trên GitHub chờ tối đa 24 giờ.
+
+### 9.1 Mất một worker (VM hỏng, disk hỏng)
+
+Job đang chạy trên worker đó sẽ lỗi; các worker còn lại vẫn nhận job.
+
+1. `kubectl delete node k3s-worker-N` (trên server).
+2. Xoá VM hỏng: `qm stop <id>; qm destroy <id> --purge`.
+3. Chạy `pve-create-vms.sh` (VM khác đã có sẽ được bỏ qua) → `node-prep.sh` → ghi `registries.yaml` → cài agent (mục 6.6, phần worker, cần `/root/k3s-token`) → kéo sẵn image `vn-gaqc-runner` và `docker:dind`.
+4. Nếu có thay đổi vCPU, chạy `resize-worker.sh`. Kiểm tra bằng `kubectl get nodes`.
+
+### 9.2 Mất `k3s-server-1`
+
+Toàn bộ cụm ngừng nhận job: listener và controller đều chạy trên server. Có 2 cách:
+
+- **Khôi phục từ snapshot etcd** (nhanh, nếu còn file snapshot): snapshot nằm ở `/var/lib/rancher/k3s/server/db/snapshots` trên chính VM 201. Disk mất thì snapshot mất theo, nên cần sao lưu ra ngoài (TODO). Trên VM server mới cùng IP, cài k3s cùng version, rồi chạy:
+    ```bash
+    sudo k3s server --cluster-reset --cluster-reset-restore-path=<file-snapshot>
+    sudo systemctl start k3s
+    ```
+- **Dựng lại sạch** (khoảng 30–60 phút, không cần snapshot): tạo lại VM 201 → cài server (mục 6.6) với **cùng token** `/root/k3s-token` → worker tự kết nối lại (nếu không, restart `k3s-agent`) → kubectl/helm (6.6) → tạo lại secret `github-app` từ `.pem` trong password manager → ConfigMap `runner-sudoers` → controller → scale set (6.8).
+
+### 9.3 Mất VM `registry-mirror`
+
+- **Docker Hub:** containerd và dockerd tự kéo thẳng từ Docker Hub (chậm hơn, dễ gặp `toomanyrequests`).
+- **Image `vn-gaqc-runner`:** chỉ có trong registry nội bộ. Worker đã có image trong cache vẫn chạy bình thường (`IfNotPresent`); worker mới hoặc worker đã bị dọn image sẽ báo `ImagePullBackOff`.
+- **Cách khôi phục:**
+    1. Dựng lại VM 220 (`pve-create-vms.sh`).
+    2. Cài Docker, rồi copy `mirror/config.yml` và `compose.yaml` sang (mục 6.7) và chạy `docker compose up -d`.
+    3. Chạy `runner-image/build.sh`, rồi sửa tag trong `runner-values.yaml` và `helm upgrade`.
+- **Phương án tạm** (chưa có registry): đổi `image:` về `ghcr.io/actions/actions-runner:<version>` rồi `helm upgrade`. Job vẫn chạy được, chỉ phải tự cài browser ở mỗi job.
+
+### 9.4 GitHub App mất hiệu lực
+
+Dấu hiệu là listener báo `401` hoặc `403` và job đứng ở "Waiting for a runner". Nguyên nhân có thể là key bị xoá, App bị gỡ hoặc bị đổi quyền. Cách xử lý:
+
+1. Kiểm tra trang App `gravityactionvn` và trang installation `63354448`.
+2. Tạo key mới, rồi ghi đè secret và restart listener ([github-app.md, mục Đổi private key](github-app.md)).
+3. Phương án tạm: dùng PAT `admin:org` cho secret `github-token` (mục 6.8).
+
+### 9.5 Mất Proxmox host
+
+Toàn bộ cụm cùng mất. Các workflow jenkins có thể tạm chạy trên runner của GitHub bằng input `runOnExternal: true`. Workflow khác thì chờ trong hàng đợi.
+
+Để dựng lại trên host mới: chạy discovery, sửa `k3s-plan.env` theo host mới (bridge, storage, IP), rồi làm lại toàn bộ mục 6.
+
+---
+
+## 10. Xử lý sự cố
 
 ```bash
 # k3s-server-1
@@ -725,7 +864,7 @@ dmesg -T | grep -iE 'oom|killed process' | tail          # host có kill VM vì 
 
 ---
 
-## 10. Nguồn
+## 11. Nguồn
 
 - [GitHub Changelog – ARC 0.15.0](https://github.blog/changelog/2026-09-30-actions-runner-controller-release-0-15-0/)
 - [GitHub Changelog – ARC 0.14.0](https://github.blog/changelog/2026-03-19-actions-runner-controller-release-0-14-0/)
