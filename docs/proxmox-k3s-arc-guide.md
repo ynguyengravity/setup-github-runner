@@ -19,6 +19,7 @@ Tài liệu liên quan:
 
 - **Trạng thái:** đang chạy production cho `runs-on: vn-gaqc-docker` từ 2026-10-22 khoảng 15:00 UTC. Đã chạy thật job `SonarQube-Scan` của repo `gg-ai-command-center-app`.
 - **Quy mô:** `minRunners: 0`, `maxRunners: 8`. Mỗi job chạy trong một pod riêng, xong job thì pod bị xoá.
+- **Tương thích với LXC cũ** (áp dụng và xác nhận ngày 2026-10-22): job chạy bằng root, `sudo` dùng được, có `docker compose`. Repo `gravity-jenkins-automation-screenshot-v2-10-2023` đã tự cài browser và load được site. Tuy nhiên, bước "Install browsers" mất khoảng **4 phút mỗi job**, vì image chưa có sẵn browser (xem TODO).
 - **Runner LXC cũ:** các container 111–135 đã xoá. Các container 100–110 đang **dừng nhưng chưa xoá**, để còn quay lại được (mục 2, TODO).
 
 ```mermaid
@@ -157,6 +158,7 @@ Image `ghcr.io/actions/actions-runner` của ARC không có các công cụ trê
 - [ ] Báo người quản lý App `gravityactionvn` rằng ARC đang dùng key có fingerprint ở mục 1.5.
 - [ ] Cân nhắc tạo App riêng chỉ có quyền `Self-hosted runners` để giảm rủi ro ([github-app.md](github-app.md)).
 - [ ] Đặt lịch hằng tháng cập nhật runner image, và hằng năm đổi private key.
+- [ ] Build image runner có sẵn browser, Node, Playwright, AWS CLI và dòng `root` trong sudoers ([runner-image/Dockerfile](../runner-image/Dockerfile)), để bỏ khoảng 4 phút cài browser ở mỗi job (run screenshot có khoảng 100 job). Build xong thì bỏ được ConfigMap `runner-sudoers` và init container compose.
 - [ ] (Tuỳ chọn) Pin `docker:dind` theo major, gắn monitoring (Prometheus) và cảnh báo.
 
 ---
