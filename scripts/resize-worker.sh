@@ -7,7 +7,8 @@
 #   bash resize-worker.sh 212 k3s-worker-2 14 30 200     # vCPU + RAM + disk
 #
 # Trình tự: cordon -> chờ hết runner pod trên node -> drain -> qm set / disk resize ->
-# qm reboot (áp dụng thay đổi phần cứng) -> chờ node Ready -> uncordon.
+# qm shutdown + qm start (áp dụng thay đổi phần cứng) -> chờ node khởi động lại (bootID đổi) và
+# Ready -> kiểm tra số CPU trong VM -> uncordon.
 # Disk chỉ tăng, không giảm được. Làm lần lượt từng worker.
 
 main() (
@@ -29,7 +30,7 @@ name=$(qm config "$VMID" | awk -F': ' '/^name:/ { print $2 }')
 [[ $name == "$NODE" ]] || die "VM $VMID tên '$name', không phải '$NODE'"
 k get node "$NODE" >/dev/null || die "kubectl không thấy node $NODE (SSH tới $SERVER?)"
 
-echo "== Hiện tại: $(qm config "$VMID" | awk -F': ' '/^(cores|memory|scsi0):/ { printf "%s=%s  ", $1, $2 }')"
+echo "== Hiện tại: $(qm config "$VMID" --current | awk -F': ' '/^(cores|memory|scsi0):/ { printf "%s=%s  ", $1, $2 }')"
 echo "== Sẽ đổi:   ${CORES:+cores=$CORES  }${MEM_GB:+memory=$((MEM_GB * 1024))  }${DISK_GB:+scsi0=${DISK_GB}G}"
 read -r -p "Gõ YES để làm: " ok </dev/tty
 [[ $ok == YES ]] || { echo "Huỷ."; exit 1; }
@@ -54,21 +55,34 @@ args=()
 (( ${#args[@]} )) && { qm set "$VMID" "${args[@]}" || die "qm set lỗi"; }
 [[ -n $DISK_GB ]] && { qm disk resize "$VMID" scsi0 "${DISK_GB}G" || die "disk resize lỗi (disk chỉ tăng được)"; }
 
-echo "== Reboot VM $VMID để áp dụng"
-qm reboot "$VMID" || die "qm reboot lỗi"
+boot_before=$(k get node "$NODE" -o jsonpath='{.status.nodeInfo.bootID}')
 
-echo "== Chờ $NODE Ready"
+# Đổi cores/memory khi VM đang chạy chỉ là "pending"; phải tắt hẳn rồi bật lại mới có hiệu lực
+echo "== Tắt VM $VMID"
+qm shutdown "$VMID" --timeout 300 || { echo "   shutdown không xong, dừng cứng"; qm stop "$VMID" || die "qm stop lỗi"; }
+echo "== Bật VM $VMID"
+qm start "$VMID" || die "qm start lỗi"
+# `qm pending` đánh dấu thay đổi chưa áp dụng bằng tiền tố new/del
+if qm pending "$VMID" | grep -qE '^(new|del) '; then die "Vẫn còn thay đổi chưa áp dụng: $(qm pending "$VMID" | grep -E '^(new|del) ' | tr '\n' ' ')"; fi
+
+echo "== Chờ $NODE khởi động lại và Ready"
 deadline=$((SECONDS + WAIT_READY_SEC))
-sleep 20
-until k get node "$NODE" --no-headers 2>/dev/null | awk '{ exit !($2 == "Ready,SchedulingDisabled" || $2 == "Ready") }'; do
+until [[ $(k get node "$NODE" -o jsonpath='{.status.nodeInfo.bootID}' 2>/dev/null) != "$boot_before" ]] \
+   && k get node "$NODE" -o jsonpath='{range .status.conditions[?(@.type=="Ready")]}{.status}{end}' 2>/dev/null | grep -qx True; do
   (( SECONDS > deadline )) && die "$NODE chưa Ready sau ${WAIT_READY_SEC}s. Xem Console VM $VMID"
   sleep 10
 done
+if [[ -n $CORES ]]; then
+  ip=$(qm config "$VMID" | sed -n 's/^ipconfig0: ip=\([0-9.]*\).*/\1/p')
+  n=$(ssh -o BatchMode=yes "ubuntu@$ip" nproc 2>/dev/null)
+  [[ $n == "$CORES" ]] || die "Trong VM nproc=$n, mong đợi $CORES. Node vẫn đang cordon"
+  echo "   nproc trong VM = $n"
+fi
 
 echo "== Uncordon $NODE"
 k uncordon "$NODE" || die "uncordon lỗi"
 k describe node "$NODE" | grep -A6 '^Allocatable'
-echo "== Xong: $(qm config "$VMID" | awk -F': ' '/^(cores|memory|scsi0):/ { printf "%s=%s  ", $1, $2 }')"
+echo "== Xong: $(qm config "$VMID" --current | awk -F': ' '/^(cores|memory|scsi0):/ { printf "%s=%s  ", $1, $2 }')"
 )
 
 main "$@"
