@@ -385,25 +385,13 @@ curl -s http://192.168.8.5:5000/v2/_catalog      # {"repositories":["library/alp
 
 Docker bên trong runner pod được trỏ vào mirror qua `--registry-mirror` ở bước 7. Nếu mirror chết, cả containerd lẫn dockerd tự quay về kéo thẳng từ Docker Hub.
 
-## Bước 5 – GitHub token, runner group, secret
+## Bước 5 – GitHub App, runner group, secret
 
-ARC xác thực với GitHub bằng một Personal Access Token (PAT). PAT luôn gắn với một người dùng: người đó rời org hoặc token hết hạn thì runner ngừng nhận job. Vì vậy:
+ARC xác thực với GitHub bằng một GitHub App thuộc org. App không gắn với tài khoản cá nhân, và private key của nó không hết hạn.
 
-- Tạo token bằng **tài khoản bot/dịch vụ** của org, không dùng tài khoản cá nhân.
-- Dùng **fine-grained PAT**, vì chỉ cần đúng quyền runner.
-- **Ghi ngày hết hạn** vào lịch để gia hạn trước.
+### 5.1 Tạo GitHub App
 
-### 5.1 Tạo token
-
-Vào GitHub → Settings → Developer settings → Personal access tokens → **Fine-grained tokens** → Generate new token:
-
-- **Resource owner:** org `<ORG>`. Nếu org bắt duyệt token thì cần Owner approve.
-- **Expiration:** theo chính sách org (tối đa 1 năm).
-- **Repository access:** All repositories, hoặc chỉ các repo dùng `vn-gaqc-docker`.
-- **Organization permissions:** `Self-hosted runners` = **Read and write**.
-- **Repository permissions:** `Metadata` = Read-only (GitHub tự thêm).
-
-Nếu org không cho dùng fine-grained token, tạo **classic PAT** với scope `admin:org`. Scope này là toàn quyền admin org, nên càng cần giữ token cẩn thận.
+Org đã có App `gravityactionvn`. Làm theo [docs/github-app.md, mục "Dùng App có sẵn"](github-app.md#dùng-app-có-sẵn-gravityactionvn) để lấy App ID, Installation ID và tạo thêm một private key riêng cho ARC. Việc này không đụng tới key đang có hay Client secret.
 
 ### 5.2 Runner group
 
@@ -412,22 +400,21 @@ Mở Org → Settings → Actions → Runner groups và xem các runner LXC `vn-
 - Runner cũ đang ở group `Default`: bỏ dòng `runnerGroup` trong values ở bước 7.
 - Muốn dùng group riêng: tạo group `proxmox`, chỉ chọn các repo nội bộ, và **không** tick "Allow public repositories". Lý do: dind chạy privileged, PR từ fork có thể chiếm quyền node.
 
-### 5.3 Namespace và secret (trên k3s-server-1)
+### 5.3 Secret (trên k3s-server-1)
+
+Tạo secret `github-app` trong namespace `arc-runners` theo [docs/github-app.md, mục "Dùng trong project này"](github-app.md#dùng-trong-project-này).
+
+**Phương án dự phòng: PAT.** Nếu chưa tạo được App, có thể dùng fine-grained PAT với Resource owner là org và quyền `Self-hosted runners` = Read and write. Nếu org không cho dùng fine-grained PAT thì dùng classic PAT với scope `admin:org`. Nên tạo PAT bằng tài khoản bot và ghi lại ngày hết hạn.
 
 ```bash
 kubectl create namespace arc-systems
 kubectl create namespace arc-runners
-read -rsp 'GitHub token: ' GH_TOKEN; echo          # nhập ẩn, không vào lịch sử shell
+read -rsp 'GitHub token: ' GH_TOKEN; echo
 kubectl create secret generic github-token -n arc-runners --from-literal=github_token="$GH_TOKEN"
 unset GH_TOKEN
-kubectl get secret github-token -n arc-runners -o jsonpath='{.data}' | jq 'keys'   # ["github_token"]
 ```
 
-Lưu token vào password manager. Ai có token này đều đăng ký được runner vào org.
-
-**Gia hạn hoặc đổi token:** tạo token mới, rồi chạy lại lệnh tạo secret, thêm `--dry-run=client -o yaml | kubectl apply -f -` vào cuối lệnh để ghi đè secret cũ. Sau đó xoá pod listener để nó đọc lại secret: `kubectl delete pod -n arc-systems -l app.kubernetes.io/component=runner-scale-set-listener`. Nếu selector này không khớp, xoá pod có tên chứa `listener`.
-
-**Muốn dùng GitHub App thay cho PAT** (không gắn với người dùng, không hết hạn): tạo App với quyền Organization `Self-hosted runners` = Read and write và tắt webhook, rồi cài App vào org. Sau đó tạo secret có 3 khoá `github_app_id`, `github_app_installation_id`, `github_app_private_key` (nội dung file `.pem`), và trỏ `githubConfigSecret` tới secret đó.
+Khi dùng PAT, đặt `githubConfigSecret: github-token` ở bước 7.
 
 ## Bước 6 – ARC controller (trên k3s-server-1)
 
@@ -446,6 +433,12 @@ metrics:                      # Prometheus metrics cho controller và listener
   controllerManagerAddr: ":8080"
   listenerAddr: ":8080"
   listenerEndpoint: "/metrics"
+# Chạy trên k3s-server-1: worker có job privileged, không để credential GitHub nằm ở đó
+nodeSelector:
+  node-role.kubernetes.io/control-plane: "true"
+tolerations:
+  - key: CriticalAddonsOnly
+    operator: Exists
 ```
 
 ```bash
@@ -453,19 +446,21 @@ export ARC_VERSION=0.15.0
 helm install arc --namespace arc-systems -f ~/controller-values.yaml --version "${ARC_VERSION}" \
   oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set-controller
 
-kubectl get pods -n arc-systems            # arc-gha-rs-controller-... Running
+kubectl get pods -n arc-systems -o wide    # arc-gha-rs-controller-... Running, cột NODE = k3s-server-1
 kubectl get crd | grep actions.github.com  # 4 CRD
 ```
 
 Tên release `arc` sinh ra ServiceAccount `arc-gha-rs-controller`, tên này được dùng ở bước 7.
+
+**Vì sao controller và listener chạy trên server:** hai pod này đọc secret chứa private key của GitHub App. Runner pod chạy dind privileged, nên code của job gần như có quyền root trên worker. Nếu controller hoặc listener chạy chung node với runner, một job xấu có thể đọc được key. `k3s-server-1` đã có taint `CriticalAddonsOnly`, nên runner không bao giờ được xếp lên đó. App `gravityactionvn` có quyền rộng (code, admin, workflows trên mọi repo), nên điểm này đặc biệt quan trọng.
 
 ## Bước 7 – Runner scale set (trên k3s-server-1)
 
 `~/runner-values.yaml`. Template dind được viết tay, không dùng `containerMode.type: dind`, để chỉnh được resources, mirror và storage:
 
 ```yaml
-githubConfigUrl: "https://github.com/<ORG>"
-githubConfigSecret: github-token
+githubConfigUrl: "https://github.com/Gravity-Global"
+githubConfigSecret: github-app       # hoặc github-token nếu dùng PAT (bước 5.3)
 
 runnerScaleSetName: "vn-gaqc-docker"   # = runs-on của workflow
 runnerGroup: "proxmox"                 # bỏ dòng này nếu dùng group Default (bước 5.2)
@@ -476,6 +471,17 @@ maxRunners: 8                          # tăng dần sau khi gỡ runner LXC cũ
 controllerServiceAccount:
   namespace: arc-systems
   name: arc-gha-rs-controller
+
+# Listener giữ credential GitHub: chạy trên k3s-server-1, không chạy chung node với job privileged
+listenerTemplate:
+  spec:
+    nodeSelector:
+      node-role.kubernetes.io/control-plane: "true"
+    tolerations:
+      - key: CriticalAddonsOnly
+        operator: Exists
+    containers:
+      - name: listener          # bắt buộc đúng tên này; các trường khác ARC giữ mặc định
 
 template:
   spec:
@@ -591,10 +597,10 @@ helm install vn-gaqc-docker --namespace arc-runners -f ~/runner-values.yaml --ve
   oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set
 
 kubectl get autoscalingrunnerset -n arc-runners    # MIN 0, MAX 8, CURRENT 0
-kubectl get pods -n arc-systems                     # có thêm pod ...-listener Running
+kubectl get pods -n arc-systems -o wide             # có thêm pod ...-listener Running trên k3s-server-1
 ```
 
-Trên GitHub (Org → Settings → Actions → Runners), scale set sẽ hiện ra với 0 runner. Nếu listener báo `401`/`403`, kiểm tra token: còn hạn không, có quyền `Self-hosted runners` (hoặc `admin:org` với classic PAT) không, và org đã duyệt token chưa.
+Trên GitHub (Org → Settings → Actions → Runners), scale set sẽ hiện ra với 0 runner. Nếu listener báo `401`/`403`/`404`, xem bảng lỗi trong [docs/github-app.md](github-app.md#xử-lý-lỗi).
 
 ## Bước 8 – Load test
 
@@ -645,7 +651,7 @@ Các runner LXC `github-runner-*` cũ đang phục vụ `vn-gaqc-docker`. Contai
 
 ### Thứ tự
 
-1. Làm bước 1–6 (VM, k3s, mirror, token, ARC controller). Trong lúc này, LXC vẫn chạy CI bình thường.
+1. Làm bước 1–6 (VM, k3s, mirror, GitHub App, ARC controller). Trong lúc này, LXC vẫn chạy CI bình thường.
 2. Chọn lúc không có job đang chạy, rồi dừng LXC (chưa xoá):
 
     ```bash
@@ -746,7 +752,7 @@ dmesg -T | grep -iE 'oom|killed process' | tail      # host có kill VM vì hế
 | Triệu chứng | Nguyên nhân thường gặp | Xử lý |
 | --- | --- | --- |
 | Job "Waiting for a runner", không có pod | `runs-on` sai tên; repo không thuộc runner group; listener không chạy; runner LXC cũ còn đăng ký trên GitHub | So `runs-on` với `runnerScaleSetName`, xem runner group, log listener; xoá runner cũ Offline trên GitHub |
-| Listener `CrashLoopBackOff`, `401`/`403`/`404` | Token hết hạn, thiếu quyền hoặc chưa được org duyệt; sai `githubConfigUrl` | Tạo token mới, ghi đè secret (5.3), xoá pod listener |
+| Listener `CrashLoopBackOff`, `401`/`403`/`404` | Sai App ID / Installation ID / private key, App thiếu quyền, node lệch giờ; sai `githubConfigUrl` | Bảng lỗi trong [docs/github-app.md](github-app.md#xử-lý-lỗi) |
 | Pod `Pending` | Thiếu CPU/RAM/disk trên worker | Giảm `maxRunners` hoặc thêm worker |
 | `EphemeralRunner` `Failed` | Pod lỗi khi khởi động | `kubectl describe ephemeralrunner <tên> -n arc-runners`, sửa lỗi rồi xoá nó |
 | `OOMKilled` | Job vượt RAM limit 2Gi | Tăng limit hoặc tách scale set riêng cho job nặng |
@@ -766,7 +772,7 @@ Nếu cần dashboard: cài `kube-prometheus-stack` (tốn khoảng 2–3 GiB RA
 - [ ] `pve-create-vms.sh`: 4 VM lên SSH, xong cloud-init, ra được github.com
 - [ ] Bước 2 đã chạy trên 3 node; k3s có 3 node `Ready`; `kubectl`/`helm` chạy được trên server
 - [ ] Mirror chạy, `_catalog` có image
-- [ ] Token (fine-grained, tài khoản bot) đã tạo, đã ghi ngày hết hạn; runner group đúng repo; secret `github-token` đã tạo
+- [ ] GitHub App đã tạo và cài vào org (checklist trong `docs/github-app.md`); runner group đúng repo; secret `github-app` đã tạo
 - [ ] ARC controller Running
 - [ ] Đã dừng LXC runner; scale set `vn-gaqc-docker` chạy; load test và workflow thật xanh
 - [ ] Đã dọn dẹp: runner cũ và LXC đã xoá, discovery chạy lại, `maxRunners` đã tăng
