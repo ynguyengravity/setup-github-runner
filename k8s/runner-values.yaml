@@ -91,7 +91,14 @@ template:
         image: ghcr.io/actions/actions-runner:2.338.1
         imagePullPolicy: IfNotPresent
         command: ["/home/runner/run.sh"]
+        # Chạy job bằng root như runner LXC cũ: nhiều workflow (vd. setup-browsers.sh của repo
+        # screenshot) gọi apt/apt-key không có sudo. Container runner vẫn KHÔNG privileged.
+        securityContext:
+          runAsUser: 0
+          runAsGroup: 0
         env:
+          - name: RUNNER_ALLOW_RUNASROOT
+            value: "1"
           - name: DOCKER_HOST
             value: unix:///var/run/docker.sock
           - name: RUNNER_WAIT_FOR_DOCKER_IN_SECONDS
