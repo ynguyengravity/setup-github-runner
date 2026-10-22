@@ -252,12 +252,12 @@ if [[ -r /proc/spl/kstat/zfs/arcstats ]]; then
     arc_mb=$((arc_cmax / 1048576))
     info "ZFS ARC: đang dùng $(gb $((arc_size / 1048576))) GiB, tối đa $(gb "$arc_mb") GiB (zfs_arc_max=$arc_param)"
     if (( arc_mb > mem_total_mb * 15 / 100 )); then
-      warn "ZFS ARC có thể chiếm tới $(gb "$arc_mb") GiB: nên giới hạn (bước 1.5)"
+      warn "ZFS ARC có thể chiếm tới $(gb "$arc_mb") GiB: nên giới hạn bằng zfs_arc_max trong /etc/modprobe.d/zfs.conf"
     else
       ok "ZFS ARC đã giới hạn hợp lý"
     fi
   else
-    info "Có module ZFS nhưng không có pool nào: ARC không dùng RAM, bỏ qua bước 1.5"
+    info "Có module ZFS nhưng không có pool nào: ARC không dùng RAM"
   fi
 fi
 
@@ -356,7 +356,7 @@ if ip link show "$BRIDGE" >/dev/null 2>&1; then
   mtu=$(cat "/sys/class/net/$BRIDGE/mtu")
   host_addr=$(ip -o -4 addr show dev "$BRIDGE" | awk '{ print $4 }' | head -1)
   ok "Bridge $BRIDGE tồn tại, MTU $mtu, IP host: ${host_addr:-không có}"
-  (( mtu < 1500 )) && warn "MTU $mtu < 1500: nếu giữ vậy, thêm '--mtu' cho dind (bước 7.1)"
+  (( mtu < 1500 )) && warn "MTU $mtu < 1500: nếu giữ vậy, thêm '--mtu' vào args của dind (guide, bước 7)"
   if awk -v b="$BRIDGE" '$1 == "iface" { inb = ($2 == b) } inb && /bridge-vlan-aware[[:space:]]+yes/ { f = 1 } END { exit !f }' /etc/network/interfaces; then
     info "$BRIDGE là VLAN-aware: có thể đặt cụm vào VLAN riêng (tag=...)"
   fi
@@ -391,7 +391,7 @@ if ip -o -4 addr show | awk '{ split($4, a, "/"); print a[1] }' | grep -qxF "$GA
     ok "Có rule MASQUERADE:"; sed 's/^/         /' <<<"$masq"
     grep -qF -- "${GATEWAY%.*}." <<<"$masq" || info "Không thấy subnet $SUBNET trong rule trên: kiểm tra rule có áp cho subnet này"
   else
-    fail "Không có rule MASQUERADE: VM trên $BRIDGE không ra được Internet (xem guide, phần vmbr1)"
+    fail "Không có rule MASQUERADE: VM trên $BRIDGE không ra được Internet (xem guide, phần Mạng)"
   fi
   dup_masq=$(iptables -t nat -S POSTROUTING 2>/dev/null | grep -i masquerade | sort | uniq -d)
   [[ -n $dup_masq ]] && info "Có rule MASQUERADE bị lặp (vô hại, do post-up chạy nhiều lần): $(head -1 <<<"$dup_masq")"
@@ -594,7 +594,7 @@ if ping -c1 -W2 1.1.1.1 >/dev/null 2>&1; then
     ok "MTU đường ra Internet = 1500"
   elif [[ -n $pmtu ]]; then
     if (( nat_host )); then
-      warn "MTU đường ra Internet ≈ $pmtu (< 1500): bật MSS clamp $((pmtu - 40)) trên host cho VM trên $BRIDGE (guide, phần vmbr1)"
+      warn "MTU đường ra Internet ≈ $pmtu (< 1500): bật MSS clamp $((pmtu - 40)) trên host cho VM trên $BRIDGE (guide, phần Mạng)"
       if iptables -t mangle -S FORWARD 2>/dev/null | grep -q TCPMSS; then
         ok "Đã có rule TCPMSS trong mangle/FORWARD"
       fi
@@ -640,7 +640,7 @@ if awk -v a="$rec" -v pc="$POD_CPU" -v f="$cpu_free" 'BEGIN { exit !(a * pc > f)
     echo "     Host gần như hết CPU rảnh: chạy runner ở đây sẽ làm chậm cả VM hiện có"
   fi
 fi
-(( excluded_ok )) || echo "  -> Nhớ exclude worker/mirror khỏi backup TRƯỚC khi tạo VM (bước 1.6)"
+(( excluded_ok )) || echo "  -> Nhớ exclude worker/mirror khỏi backup TRƯỚC khi tạo VM (guide, bước 1.3)"
 (( FAIL == 0 )) || { echo; echo "  ${R}Sửa các mục FAIL trước khi làm bước 1.${N}"; exit 1; }
 exit 0
 )
