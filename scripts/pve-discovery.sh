@@ -90,6 +90,16 @@ conf_of_id() {
 
 gb() { awk -v v="$1" 'BEGIN { printf "%.1f", v / 1024 }'; }   # MiB -> GiB
 
+# IP có nằm trong một dải DHCP_RANGES ("start end" dạng số, mỗi dòng một dải) không
+in_dhcp_range() {
+  local n s e
+  n=$(ip2int "$1")
+  while read -r s e; do
+    [[ -n $s ]] && (( n >= s && n <= e )) && return 0
+  done <<<"$DHCP_RANGES"
+  return 1
+}
+
 int2ip() { echo "$(( ($1 >> 24) & 255 )).$(( ($1 >> 16) & 255 )).$(( ($1 >> 8) & 255 )).$(( $1 & 255 ))"; }
 
 # In các dải IP trống trong <ip>/<prefix> (prefix >= 22): không trả lời ping/ARP,
@@ -117,14 +127,15 @@ suggest_free_ips() {
   )
   rm -rf "$tmp"
   for ((n = first; n <= last; n++)); do
-    [[ -n ${used[$(int2ip "$n")]:-} ]] || echo "$n"
+    ip=$(int2ip "$n")
+    [[ -n ${used[$ip]:-} ]] || in_dhcp_range "$ip" || echo "$n"
   done | awk '
     function ip(n) { return int(n / 16777216) "." (int(n / 65536) % 256) "." (int(n / 256) % 256) "." (n % 256) }
     function out() { printf "%s%s%s", sep, ip(s), (p > s ? " – " ip(p) : ""); sep = ", "; c += p - s + 1 }
     NR == 1     { s = p = $1; next }
     $1 == p + 1 { p = $1; next }
                 { out(); s = p = $1 }
-    END         { if (NR) out(); printf "\n         (%d IP, bỏ qua %d IP đang dùng)\n", c, '"$((last - first + 1))"' - c }'
+    END         { if (NR) out(); printf "\n         (%d IP, bỏ qua %d IP đang dùng hoặc thuộc dải DHCP)\n", c, '"$((last - first + 1))"' - c }'
 }
 
 # maxRunners gợi ý cho w worker (giống công thức trong guide)
@@ -367,6 +378,7 @@ SUBNET="$GATEWAY/$PREFIX"
 
 # Gateway là chính Proxmox host (bridge nội bộ như vmbr1): VM ra Internet nhờ NAT của host
 nat_host=0
+DHCP_RANGES=''
 if ip -o -4 addr show | awk '{ split($4, a, "/"); print a[1] }' | grep -qxF "$GATEWAY"; then
   info "Gateway $GATEWAY là chính Proxmox host: VM ra Internet qua NAT của host"
   if [[ $(sysctl -n net.ipv4.ip_forward) == 1 ]]; then
@@ -390,11 +402,16 @@ if ip -o -4 addr show | awk '{ split($4, a, "/"); print a[1] }' | grep -qxF "$GA
     warn "Host đang chạy DHCP server (${dhcp:-không rõ tiến trình}): IP tĩnh của cụm phải nằm NGOÀI dải cấp phát"
     sed 's/^/         /' <<<"$dhcp_ss"
     ranges=$( { pgrep -a dnsmasq | grep -o -- '--dhcp-range=[^ ]*'
-                grep -Hs 'dhcp-range' /etc/dnsmasq.conf /etc/dnsmasq.d/* /etc/pve/sdn/subnets.cfg
+                grep -Hs '^[[:space:]]*dhcp-range' /etc/dnsmasq.conf /etc/dnsmasq.d/* /etc/pve/sdn/subnets.cfg
                 grep -Hs '^[[:space:]]*range[[:space:]]' /etc/dhcp/dhcpd.conf
                 grep -Hs '"pool"' /etc/kea/kea-dhcp4.conf; } | sort -u)
     if [[ -n $ranges ]]; then
       info "Dải cấp phát DHCP tìm thấy:"; sed 's/^/         /' <<<"$ranges"
+      # Mỗi dòng lấy 2 IPv4 đầu tiên (bỏ tiền tố "file:") làm đầu/cuối dải
+      DHCP_RANGES=$(while read -r line; do
+        read -r a b _ <<<"$(grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' <<<"${line#*:}" | tr '\n' ' ')"
+        [[ -n ${a:-} ]] && echo "$(ip2int "$a") $(ip2int "${b:-$a}")"
+      done <<<"$ranges")
     else
       info "Không đọc được dải DHCP: xem cấu hình của ${dhcp:-tiến trình đang nghe cổng 67}"
     fi
@@ -434,6 +451,11 @@ for ip in $all_ips; do
   if ! cidr_overlap "$ip/32" "$SUBNET"; then fail "$ip nằm ngoài subnet $SUBNET"; ip_problem=1; continue; fi
   [[ $ip == "$GATEWAY" ]] && { fail "$ip trùng gateway"; continue; }
   grep -qxF "$ip" <<<"$host_ips" && { fail "$ip đang là IP của chính Proxmox host"; continue; }
+  if in_dhcp_range "$ip"; then
+    fail "$ip nằm trong dải DHCP: DHCP có thể cấp trùng IP này cho máy khác"
+    ip_problem=1
+    continue
+  fi
 
   owner=$(grep -lF "ip=$ip/" /etc/pve/nodes/*/qemu-server/*.conf /etc/pve/nodes/*/lxc/*.conf 2>/dev/null | head -1)
   if [[ -n $owner ]]; then
@@ -454,13 +476,13 @@ for ip in $all_ips; do
     warn "$ip không trả lời, nhưng host không cùng subnet nên chưa chắc trống"
   fi
 done
-info "Script không thấy được dải DHCP của router: đảm bảo các IP trên nằm NGOÀI dải DHCP"
+[[ -n $DHCP_RANGES ]] || info "Script không thấy được dải DHCP của router: đảm bảo các IP trên nằm NGOÀI dải DHCP"
 
 if [[ $SCAN == 1 || ( $SCAN == auto && ( $ip_problem == 1 || $on_link == 0 ) ) ]] && [[ -n $host_addr ]]; then
   scan_net=$host_addr
   (( ${host_addr#*/} < 22 )) && scan_net="${host_addr%/*}/24"   # subnet lớn hơn /22: chỉ quét /24 của host
   info "Đang quét $scan_net (ping + ARP)..."
-  info "Gợi ý IP trống (không ping/ARP, không có trong config VM nào):"
+  info "Gợi ý IP trống (không ping/ARP, không có trong config VM, ngoài dải DHCP):"
   echo -n "         "; suggest_free_ips "$scan_net"
   info "Thiết bị đang tắt hoặc chặn cả ARP sẽ trông như trống: đối chiếu thêm với IPAM/DHCP"
 fi
@@ -591,8 +613,8 @@ section "8. Chuẩn bị khác"
 if [[ -f $SSH_PUBKEY ]]; then
   ok "Có SSH public key $SSH_PUBKEY"
 else
-  warn "Chưa có $SSH_PUBKEY: copy public key của máy admin lên, hoặc chạy với SSH_PUBKEY=<file>"
-  info "Từ máy admin: scp ~/.ssh/id_ed25519.pub root@<proxmox>:/root/admin.pub, rồi dùng --sshkeys /root/admin.pub ở bước 1.2"
+  warn "Chưa có $SSH_PUBKEY: tạo key trên Proxmox host (bước 1.1), hoặc chạy với SSH_PUBKEY=<file>"
+  info "ssh-keygen -t ed25519 -f /root/.ssh/id_ed25519 -N '' -C 'proxmox-k3s-admin'"
 fi
 [[ -f $CLOUD_IMAGE ]] && info "Cloud image đã có: $CLOUD_IMAGE" \
                       || info "Chưa tải cloud image (bước 1.2 sẽ tải)"
