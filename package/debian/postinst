@@ -1,0 +1,17 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "configure" ]; then
+    chmod 600 /etc/lxc-runner/lxc-runner.env
+    mkdir -p /var/lib/lxc-runner
+    systemctl daemon-reload || true
+
+    # Timer is never enabled automatically: fill in the config and test first
+    if ! systemctl is-enabled --quiet lxc-runner-recycle.timer 2>/dev/null; then
+        echo "lxc-runner: điền GITHUB_TOKEN trong /etc/lxc-runner/lxc-runner.env, chạy thử"
+        echo "            'lxc-runner recycle --dry-run', rồi bật timer:"
+        echo "            systemctl enable --now lxc-runner-recycle.timer"
+    fi
+fi
+
+exit 0

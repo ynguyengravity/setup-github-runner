@@ -2,17 +2,20 @@
 
 set -e
 
-GITHUB_RUNNER_URL="https://github.com/actions/runner/releases/download/v2.338.0/actions-runner-linux-x64-2.338.0.tar.gz"
-TEMPL_URL="http://download.proxmox.com/images/system/ubuntu-24.04-standard_24.04-2_amd64.tar.zst"
-PCTSIZE="25G"
-# Container resources (override via env). Host RAM is heavily overcommitted, keep these modest.
+# Tất cả biến đọc từ env trước (vd. /etc/lxc-runner/lxc-runner.env), fallback về giá trị mặc định
+GITHUB_RUNNER_URL="${GITHUB_RUNNER_URL:-https://github.com/actions/runner/releases/download/v2.338.0/actions-runner-linux-x64-2.338.0.tar.gz}"
+TEMPL_URL="${TEMPL_URL:-http://download.proxmox.com/images/system/ubuntu-24.04-standard_24.04-2_amd64.tar.zst}"
+PCTSIZE="${PCTSIZE:-25G}"
+# Container resources. Host RAM is heavily overcommitted, keep these modest.
 PCT_CORES="${PCT_CORES:-3}"
 PCT_MEMORY="${PCT_MEMORY:-16384}"   # MiB
 PCT_SWAP="${PCT_SWAP:-4096}"        # MiB
-RUNNER_LABELS="vn-gaqc-docker,test-setup"
+PCT_STORAGE="${PCT_STORAGE:-local-lvm2}"
+PCT_BRIDGE="${PCT_BRIDGE:-vmbr1}"
+RUNNER_LABELS="${RUNNER_LABELS:-vn-gaqc-docker,test-setup}"
 # RUNNER_LABELS="test-playwright"
-RUNNER_GROUP="VN-Team"
-ORGNAME="Gravity-Global"
+RUNNER_GROUP="${RUNNER_GROUP:-VN-Team}"
+ORGNAME="${ORGNAME:-Gravity-Global}"
 CURRENT_DATE=$(date +%Y%m%d)
 
 log() {
@@ -67,10 +70,10 @@ pct create $PCTID $TEMPL_FILE \
     -cores $PCT_CORES \
     -memory $PCT_MEMORY \
     -swap $PCT_SWAP \
-    -storage local-lvm2 \
+    -storage $PCT_STORAGE \
     -features nesting=1,keyctl=1 \
     -unprivileged 0 \
-    -net0 name=eth0,bridge=vmbr1,ip=dhcp,firewall=1,type=veth
+    -net0 name=eth0,bridge=$PCT_BRIDGE,ip=dhcp,firewall=1,type=veth
 
 log "-- Resizing container to $PCTSIZE"
 pct resize $PCTID rootfs $PCTSIZE
@@ -338,6 +341,10 @@ pct exec $PCTID -- bash -c "
 # =================================
 log "-- Restarting container"
 pct reboot $PCTID
+
+log "-- Template ready: container ID ${PCTID}"
+log "-- Set SOURCE_CONTAINER_ID=${PCTID} before cloning runners from it"
+echo "TEMPLATE_PCTID=${PCTID}"
 
 # log "-- Installing runner"
 # pct exec $PCTID -- bash -c "export LANG=en_US.UTF-8 && \

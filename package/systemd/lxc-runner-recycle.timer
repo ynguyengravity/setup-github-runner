@@ -1,0 +1,11 @@
+[Unit]
+Description=Run lxc-runner recycle every 15 minutes
+Documentation=https://github.com/ynguyengravity/setup-github-runner
+
+[Timer]
+OnBootSec=10min
+OnCalendar=*:0/15
+Persistent=true
+
+[Install]
+WantedBy=timers.target

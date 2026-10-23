@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# lxc-runner — quản lý GitHub Actions runner LXC trên Proxmox
+
+set -euo pipefail
+
+VERSION="@VERSION@"
+LXC_RUNNER_LIB="${LXC_RUNNER_LIB:-/usr/lib/lxc-runner}"
+export LXC_RUNNER_LIB
+# shellcheck source=lib/common.sh
+source "$LXC_RUNNER_LIB/common.sh"
+
+usage() {
+    cat <<EOF
+lxc-runner ${VERSION} — GitHub Actions runner LXC trên Proxmox
+
+Cách dùng: lxc-runner <lệnh> [tham số]
+
+  template            Tạo container template (cài browsers, Node, Playwright, Docker...)
+  clone [N]           Clone N runner mới từ template (mặc định 1)
+  recycle [--dry-run] Dọn/rebuild runner có disk >= DISK_THRESHOLD khi đang rảnh
+  status              Liệt kê runner: disk, trạng thái GitHub, bận/rảnh
+  version             In phiên bản
+
+Cấu hình: ${LXC_RUNNER_CONFIG}
+Biến môi trường ghi đè cấu hình, vd: PCT_CORES=6 lxc-runner clone
+Timer:    systemctl enable --now lxc-runner-recycle.timer
+Log:      journalctl -u lxc-runner-recycle
+EOF
+}
+
+cmd_template() {
+    require_root
+    load_config
+    mkdir -p "$LXC_RUNNER_STATE/cache"
+    cd "$LXC_RUNNER_STATE/cache"
+    exec "$LXC_RUNNER_LIB/master.sh"
+}
+
+cmd_clone() {
+    local n="${1:-1}" i
+    if ! [[ "$n" =~ ^[1-9][0-9]*$ ]]; then
+        err "N phải là số nguyên dương"
+        exit 2
+    fi
+    require_root
+    load_config
+    require_token
+    for ((i = 1; i <= n; i++)); do
+        log "== Clone runner $i/$n"
+        "$LXC_RUNNER_LIB/clone.sh" < /dev/null
+    done
+}
+
+cmd_status() {
+    require_root
+    load_config
+    local runners='[]'
+    if [ -n "${GITHUB_TOKEN:-}" ]; then
+        runners=$(gh_list_runners) || { warn "Không đọc được runner từ GitHub"; runners='[]'; }
+    fi
+
+    printf "%-6s %-40s %-8s %5s  %-8s %s\n" VMID NAME STATUS DISK GITHUB BUSY
+    pve_list_runner_cts | jq -r --argjson r "$runners" '
+        .[] | . as $ct
+        | ($r | map(select(.name == $ct.name)) | first) as $gh
+        | [ .vmid, .name, .status,
+            (if .maxdisk > 0 then "\((.disk * 100 / .maxdisk) | floor)%" else "-" end),
+            ($gh.status // "-"),
+            (if $gh == null then "-" elif $gh.busy then "yes" else "no" end) ]
+        | @tsv' |
+    while IFS=$'\t' read -r vmid name status disk gh busy; do
+        printf "%-6s %-40s %-8s %5s  %-8s %s\n" "$vmid" "$name" "$status" "$disk" "$gh" "$busy"
+    done
+}
+
+case "${1:-help}" in
+    template) shift; cmd_template "$@" ;;
+    clone)    shift; cmd_clone "$@" ;;
+    recycle)  shift; require_root; load_config; require_token; exec "$LXC_RUNNER_LIB/recycle.sh" "$@" ;;
+    status)   shift; cmd_status "$@" ;;
+    version|--version|-v) echo "$VERSION" ;;
+    help|--help|-h) usage ;;
+    *) usage >&2; exit 2 ;;
+esac

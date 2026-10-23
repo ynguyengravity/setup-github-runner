@@ -229,3 +229,6 @@ log "-- Auto-start enabled: Container will start automatically when Proxmox boot
 if [ "$SOURCE_WAS_RUNNING" = true ]; then
     log "-- Source container ${SOURCE_CONTAINER_ID} has been restarted"
 fi
+
+# Machine-readable result for callers (lxc-runner clone/recycle)
+echo "NEW_PCTID=${NEW_PCTID}"

@@ -1,0 +1,44 @@
+name: Build lxc-runner-tools .deb
+
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Lint scripts
+        run: |
+          bash -n package/lxc-runner package/lib/*.sh lxc_create_github_actions_runner.*.sh
+          shellcheck -S error package/lxc-runner package/lib/*.sh
+
+      - name: Build package
+        run: package/build-deb.sh "${GITHUB_REF_NAME}"
+
+      - name: Inspect package
+        run: |
+          dpkg-deb --info dist/*.deb
+          dpkg-deb --contents dist/*.deb
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lxc-runner-tools
+          path: dist/*.deb
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "${GITHUB_REF_NAME}" > /dev/null 2>&1 ||
+            gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --generate-notes
+          gh release upload "${GITHUB_REF_NAME}" dist/*.deb --clobber

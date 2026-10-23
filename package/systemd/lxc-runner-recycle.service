@@ -1,0 +1,11 @@
+[Unit]
+Description=Clean or rebuild idle LXC GitHub runners with full disks
+Documentation=https://github.com/ynguyengravity/setup-github-runner
+After=network-online.target pve-cluster.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/lxc-runner recycle
+TimeoutStartSec=3600
+SyslogIdentifier=lxc-runner-recycle

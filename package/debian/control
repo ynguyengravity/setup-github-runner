@@ -1,0 +1,12 @@
+Package: lxc-runner-tools
+Version: @VERSION@
+Section: admin
+Priority: optional
+Architecture: all
+Depends: bash, curl, jq, util-linux, pve-container
+Maintainer: y.nguyen <y.nguyen@gravityglobal.com>
+Homepage: https://github.com/ynguyengravity/setup-github-runner
+Description: GitHub Actions runner LXC management for Proxmox
+ Creates a runner template container, clones and registers runners,
+ and a systemd timer that cleans or rebuilds idle runners whose disk
+ usage is above a threshold.

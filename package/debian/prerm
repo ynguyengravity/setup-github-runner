@@ -1,0 +1,9 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "remove" ]; then
+    systemctl disable --now lxc-runner-recycle.timer 2>/dev/null || true
+    systemctl stop lxc-runner-recycle.service 2>/dev/null || true
+fi
+
+exit 0
