@@ -43,6 +43,7 @@ Với mỗi container khớp `LXC_NAME_PATTERN` (trừ template `SOURCE_CONTAINE
 1. Disk < `DISK_THRESHOLD` → bỏ qua.
 2. Runner bận (GitHub API `busy` hoặc có tiến trình `Runner.Worker`) → bỏ qua, lượt sau thử lại.
 3. Drain: gỡ custom labels trên GitHub → chờ `DRAIN_WAIT` → kiểm tra lại → stop runner service.
+   - Tổng số runner > `MAX_RUNNERS` → gỡ đăng ký + xóa LXC, **không clone thêm** (bỏ qua bước 4–5).
 4. Dọn: `docker system prune -af`, `_work` (giữ `_tool`, `_actions`), apt cache, journal. Disk < `CLEAN_TARGET` → start lại runner, trả labels.
 5. Vẫn đầy → rebuild (tối đa `MAX_REBUILDS_PER_RUN` mỗi lượt, trong `REBUILD_HOURS` nếu có):
    - Storage đủ chỗ: clone mới → chờ online → gỡ đăng ký + xóa cũ. Lỗi thì giữ container cũ.

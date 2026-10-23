@@ -59,15 +59,19 @@ cmd_status() {
         runners=$(gh_list_runners) || { warn "Không đọc được runner từ GitHub"; runners='[]'; }
     fi
 
+    local cts total
+    cts=$(pve_list_runner_cts)
+    total=$(jq 'length' <<< "$cts")
+    echo "Runners: ${total}${MAX_RUNNERS:+ / max ${MAX_RUNNERS}}"
     printf "%-6s %-40s %-8s %5s  %-8s %s\n" VMID NAME STATUS DISK GITHUB BUSY
-    pve_list_runner_cts | jq -r --argjson r "$runners" '
+    jq -r --argjson r "$runners" '
         .[] | . as $ct
         | ($r | map(select(.name == $ct.name)) | first) as $gh
         | [ .vmid, .name, .status,
             (if .maxdisk > 0 then "\((.disk * 100 / .maxdisk) | floor)%" else "-" end),
             ($gh.status // "-"),
             (if $gh == null then "-" elif $gh.busy then "yes" else "no" end) ]
-        | @tsv' |
+        | @tsv' <<< "$cts" |
     while IFS=$'\t' read -r vmid name status disk gh busy; do
         printf "%-6s %-40s %-8s %5s  %-8s %s\n" "$vmid" "$name" "$status" "$disk" "$gh" "$busy"
     done

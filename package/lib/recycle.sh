@@ -6,8 +6,9 @@
 #   1. disk < DISK_THRESHOLD                → bỏ qua
 #   2. runner đang bận (GitHub API / Runner.Worker) → bỏ qua, lần sau thử lại
 #   3. drain: gỡ custom labels trên GitHub, chờ, kiểm tra lại, stop runner service
-#   4. dọn (docker prune, _work, apt, journal) → disk < CLEAN_TARGET thì trả runner về
-#   5. còn đầy → clone runner mới từ template, gỡ đăng ký + xóa container cũ
+#   4. số runner > MAX_RUNNERS → gỡ đăng ký + xóa container, không clone thêm
+#   5. dọn (docker prune, _work, apt, journal) → disk < CLEAN_TARGET thì trả runner về
+#   6. còn đầy → clone runner mới từ template, gỡ đăng ký + xóa container cũ
 
 set -uo pipefail
 
@@ -28,6 +29,7 @@ DISK_THRESHOLD="${DISK_THRESHOLD:-90}"
 CLEAN_TARGET="${CLEAN_TARGET:-80}"
 CLEANUP="${CLEANUP:-1}"
 MAX_REBUILDS_PER_RUN="${MAX_REBUILDS_PER_RUN:-1}"
+MAX_RUNNERS="${MAX_RUNNERS:-}"              # rỗng = không giới hạn (luôn clone thay thế)
 REBUILD_HOURS="${REBUILD_HOURS:-}"          # vd "1-6"; rỗng = bất kỳ lúc nào
 LXC_IDS="${LXC_IDS:-}"                      # vd "101,102"; rỗng = tất cả runner
 DRAIN_WAIT="${DRAIN_WAIT:-20}"              # giây chờ sau khi gỡ labels
@@ -35,7 +37,8 @@ ONLINE_WAIT="${ONLINE_WAIT:-180}"           # giây chờ runner mới online
 STORAGE_MARGIN_GB="${STORAGE_MARGIN_GB:-10}"
 PCT_STORAGE="${PCT_STORAGE:-local-lvm2}"
 
-REBUILT=0 CLEANED=0 SKIPPED_BUSY=0 FAILED=0
+REBUILT=0 REMOVED=0 CLEANED=0 SKIPPED_BUSY=0 FAILED=0
+RUNNER_TOTAL=0   # số runner container hiện có (giảm dần khi xóa trong lượt này)
 RUNNERS='[]'
 SAVED_LABELS='[]'
 
@@ -238,13 +241,40 @@ process_ct() {
         return 0
     fi
 
+    local over_max=0
+    if [ -n "$MAX_RUNNERS" ] && [ "$RUNNER_TOTAL" -gt "$MAX_RUNNERS" ]; then
+        over_max=1
+    fi
+
     if [ "$DRY_RUN" = "1" ]; then
-        info "  [DRY-RUN] Sẽ drain → dọn → rebuild nếu vẫn >= ${CLEAN_TARGET}%"
+        if [ "$over_max" = "1" ]; then
+            info "  [DRY-RUN] ${RUNNER_TOTAL} runner > max ${MAX_RUNNERS} — sẽ drain → xóa, không clone thêm"
+        else
+            info "  [DRY-RUN] Sẽ drain → dọn → rebuild nếu vẫn >= ${CLEAN_TARGET}%"
+        fi
         return 0
     fi
 
     if ! drain "$vmid" "$name" "$runner"; then
         SKIPPED_BUSY=$((SKIPPED_BUSY + 1))
+        return 0
+    fi
+
+    # Vượt số lượng tối đa: xóa luôn, không dọn, không clone thay thế
+    if [ "$over_max" = "1" ]; then
+        if ! in_rebuild_window; then
+            undrain "$vmid" "$runner"
+            warn "  Ngoài khung giờ ${REBUILD_HOURS} — chờ lượt sau để xóa"
+            return 0
+        fi
+        if destroy_ct "$vmid" "$runner"; then
+            RUNNER_TOTAL=$((RUNNER_TOTAL - 1))
+            REMOVED=$((REMOVED + 1))
+            notify "🗑️ LXC removed | ${vmid} (${name}) | disk ${pct_used}% | còn ${RUNNER_TOTAL}/${MAX_RUNNERS} runner"
+        else
+            notify "❌ LXC remove FAILED | ${vmid} (${name})"
+            FAILED=$((FAILED + 1))
+        fi
         return 0
     fi
 
@@ -295,6 +325,13 @@ if ! RUNNERS=$(gh_list_runners); then
 fi
 
 CTS=$(pve_list_runner_cts) || { err "Không đọc được danh sách container"; exit 1; }
+# Đếm trên toàn bộ runner (kể cả container đang tắt), trước khi lọc LXC_IDS
+RUNNER_TOTAL=$(jq 'length' <<< "$CTS")
+if [ -n "$MAX_RUNNERS" ] && ! [[ "$MAX_RUNNERS" =~ ^[0-9]+$ ]]; then
+    err "MAX_RUNNERS phải là số nguyên: '$MAX_RUNNERS'"
+    exit 2
+fi
+info "Runners: ${RUNNER_TOTAL}${MAX_RUNNERS:+ (max ${MAX_RUNNERS})}"
 if [ -n "$LXC_IDS" ]; then
     CTS=$(jq -c --arg ids "$LXC_IDS" '($ids | split(",") | map(tonumber)) as $f | map(select(.vmid as $v | $f | index($v)))' <<< "$CTS")
 fi
@@ -304,5 +341,5 @@ while IFS=$'\t' read -r vmid name status disk maxdisk <&3; do
     process_ct "$vmid" "$name" "$status" "$disk" "$maxdisk"
 done 3< <(jq -r '.[] | [.vmid, .name, .status, (.disk | floor), (.maxdisk | floor)] | @tsv' <<< "$CTS")
 
-info "Xong: rebuilt ${REBUILT}, cleaned ${CLEANED}, bận ${SKIPPED_BUSY}, lỗi ${FAILED}"
+info "Xong: rebuilt ${REBUILT}, removed ${REMOVED}, cleaned ${CLEANED}, bận ${SKIPPED_BUSY}, lỗi ${FAILED} — còn ${RUNNER_TOTAL} runner"
 [ "$FAILED" -eq 0 ]
