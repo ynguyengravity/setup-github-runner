@@ -25,12 +25,14 @@ Cập nhật lần cuối: 2026-10-23.
 |---|---|
 | Gói trên host | ✅ `lxc-runner-tools 0.0.4` đã cài (2026-10-23 ~17:00, output `apt install` + `lxc-runner version`) |
 | Timer recycle | ✅ bật, chạy mỗi 15 phút (`systemctl list-timers` 2026-10-23 16:47: last 16:45, next 17:00) |
-| Số runner | ✅ 31 LXC, VMID 101–131, tất cả `running` + `online` trên GitHub, disk 13–38% (`lxc-runner status` 2026-10-23 ~16:40) |
+| Số runner | ✅ 31 LXC, VMID 101–131, tất cả `running` + `online` trên GitHub, disk 13–38% (`lxc-runner status` 2026-10-23 ~16:40) — sau test clone là 32 (xem dưới) |
 | `MAX_RUNNERS` trên host | ✅ 50 (dòng `Runners: 31 / max 50`) |
-| `DRY_RUN` trên host | ⚠️ chưa thấy — kiểm tra: `grep DRY_RUN /etc/lxc-runner/lxc-runner.env` hoặc dòng `Recycle: ... dry-run N` trong journal |
-| `FILL_TO_MAX` trên host | ⚠️ chưa thấy (mặc định gói = 0) |
-| `SOURCE_CONTAINER_ID` (template) | ⚠️ chưa xác nhận template hiện tại là ID nào / còn tồn tại không |
-| Template mới | ⚠️ đang build lại. Lần build bằng 0.0.3 **lỗi** ở bước Docker (✅ output `Failed to restart docker.service: Unit docker.service not found`). Nguyên nhân nghi do `DRY_RUN` lọt vào container (mục 8) — ⚠️ chưa chạy lệnh xác nhận. ⚠️ ID của container template dở dang và đã xóa chưa: chưa biết |
+| `DRY_RUN` trên host | ✅ `0` — timer **chạy thật** (dọn / rebuild / xóa LXC tắt) (`grep` config, 2026-10-23 ~17:50) |
+| `FILL_TO_MAX` trên host | ✅ `1`, `MAX_CLONES_PER_RUN=2`, `MAX_RUNNERS=50` (`grep` config, 2026-10-23 ~17:55) → mỗi lượt timer clone thêm 2 cho tới 50 (từ 32: ~9 lượt). ⚠️ chưa kiểm tra storage `local-lvm2` đủ cho +18 × 25G và tải CPU |
+| `SOURCE_CONTAINER_ID` (template) | ✅ `100` (2026-10-23 ~17:35, `grep` config + `pct list`) |
+| Template 100 | ✅ build lại bằng 0.0.4, `github-runner-100-20261023`, 3 core / 16384 MiB / 25G `local-lvm2` (`pct config 100`). ✅ Docker `active` + `hello-world` chạy; Chrome 156.0.8078.47, Edge 156.0.4314.42, Firefox 158.0.1, Node v24.22.1, Playwright 1.64.1, AWS CLI 2.38.5; tarball runner 2.338.0; chưa có `.runner` (kiểm tra bằng `pct exec 100`, 2026-10-23 ~17:40). Lần build trước bằng 0.0.3 lỗi ở bước Docker (✅ `Unit docker.service not found`); nguyên nhân nghi do `DRY_RUN` lọt vào container (mục 8) — ⚠️ chưa chạy lệnh xác nhận |
+| Clone từ template 100 | ✅ 2026-10-23 17:34–17:40 (output lệnh): `recycle` ép ngưỡng trên LXC 128 → drain, dọn, clone **132** (`github-runner-132-20261023`), chờ online OK, xóa 128 — ~3 phút, copy ~6,1 GB/clone. Sau đó `lxc-runner clone 1` tạo lại **128** (`github-runner-128-20261023`, VMID dùng lại) |
+| Runner sau test | ✅ 32 (theo output): 30 runner `MAY` (101–127, 129–131) + 2 runner từ template 100 (128, 132). ✅ `github-runner-128-20261023` và `github-runner-132-20261023` **Idle** trên GitHub, group `VN-Team`, labels `self-hosted, X64, Linux, vn-gaqc-docker, test-setup` (ảnh chụp trang Runners của org, 2026-10-23 ~17:45). ⚠️ chưa xác nhận runner cũ `github-runner-128-20261023MAY` đã biến mất khỏi danh sách |
 | Nguồn gốc 31 runner | ⚠️ tên dạng `github-runner-1xx-20261023MAY` — hậu tố `MAY` **không** do script trong repo tạo; cấu hình (cores/RAM/disk) chưa kiểm tra |
 | OS host | ✅ Debian 13 (libc `2.41-12+deb13u4` trong output apt, 2026-10-23) |
 | OS trong container | ✅ Ubuntu 24.04 (libc `2.39-0ubuntu8.9` trong output build template) |
@@ -151,7 +153,7 @@ Chạy thử một vòng đầy đủ trên 1 runner rảnh:
 
 ## 9. Việc còn mở / rủi ro
 
-- ⚠️ **Template**: build lại bằng 0.0.4 → kiểm tra (`docker --version`, browsers, `node -v`, `npx playwright --version`, `aws --version`, `ls /root/actions-runner`) → đặt `SOURCE_CONTAINER_ID` → test clone → xóa (hoặc tag skip) template cũ.
+- 30 runner `MAY` **không** được clone từ template 100 (cấu hình ⚠️ chưa rõ). Muốn đồng bộ: rebuild dần từng runner rảnh bằng `DRY_RUN=0 DISK_THRESHOLD=1 CLEAN_TARGET=1 LXC_IDS=<id> lxc-runner recycle` (~3 phút/runner).
 - ⚠️ **Trùng label với ARC**: `RUNNER_LABELS` chứa `vn-gaqc-docker` = tên scale set ARC → job chia giữa LXC và ARC nếu ARC còn chạy. (Đã quyết định để nguyên — 2026-10-23.)
 - ⚠️ **Tải CPU**: 31 LXC + ARC trên 32 thread. `MAX_RUNNERS=50` + `FILL_TO_MAX=1` sẽ clone thêm 19. Đo `uptime` trước khi tăng.
 - ⚠️ **Docker `iptables:false`** trong container: Docker network có thể không có NAT ra ngoài. Chưa test (đã quyết định bỏ qua — 2026-10-23).
