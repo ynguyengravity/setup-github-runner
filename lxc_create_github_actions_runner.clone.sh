@@ -5,11 +5,11 @@ set -e
 # Configuration variables
 # Tất cả biến đọc từ env trước, fallback về giá trị mặc định
 SOURCE_CONTAINER_ID="${SOURCE_CONTAINER_ID:-100}"
-GITHUB_RUNNER_URL="${GITHUB_RUNNER_URL:-https://github.com/actions/runner/releases/download/v2.334.0/actions-runner-linux-x64-2.334.0.tar.gz}"
+GITHUB_RUNNER_URL="${GITHUB_RUNNER_URL:-https://github.com/actions/runner/releases/download/v2.338.0/actions-runner-linux-x64-2.338.0.tar.gz}"
 RUNNER_LABELS="${RUNNER_LABELS:-vn-gaqc-docker,test-setup}"
 RUNNER_GROUP="${RUNNER_GROUP:-VN-Team}"
 ORGNAME="${ORGNAME:-Gravity-Global}"
-CURRENT_DATE=$(date +%Y%m%d)-27
+CURRENT_DATE=$(date +%Y%m%d)
 
 # Get GitHub token
 # Nếu chạy unattended (từ service/cron): bắt buộc GITHUB_TOKEN phải có trong env
