@@ -15,13 +15,18 @@ set -euo pipefail
 
 RUNNER_VERSION=${1:-${RUNNER_VERSION:-2.338.1}}
 MIRROR=${MIRROR:-ubuntu@192.168.8.5}
-WORKERS=${WORKERS:-"192.168.8.3 192.168.8.4"}
+SERVER=${SERVER:-ubuntu@192.168.8.2}
+# Mặc định lấy IP mọi worker (label gha-runner=true) từ cụm, để worker mới cũng được kéo sẵn image
+WORKERS=${WORKERS:-$(ssh -o BatchMode=yes "$SERVER" "kubectl get nodes -l gha-runner=true -o jsonpath='{.items[*].status.addresses[?(@.type==\"InternalIP\")].address}'" 2>/dev/null)}
 REGISTRY=${REGISTRY:-192.168.8.5:5001}
 NAME=vn-gaqc-runner
 TAG="${RUNNER_VERSION}-$(date +%Y%m%d%H%M)"
 DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 [[ -f $DIR/Dockerfile ]] || { echo "Không thấy $DIR/Dockerfile" >&2; exit 2; }
+
+[[ -n $WORKERS ]] || { echo "Không lấy được danh sách worker từ $SERVER (đặt WORKERS=\"ip1 ip2 ...\")" >&2; exit 2; }
+echo "== Worker sẽ kéo sẵn image: $WORKERS"
 
 echo "== Kiểm tra registry nội bộ trên mirror"
 ssh -o BatchMode=yes "$MIRROR" 'curl -fsS http://localhost:5001/v2/ >/dev/null' \

@@ -3,7 +3,7 @@
 # (server + worker; VM registry-mirror không cần).
 #
 # Chạy từ Proxmox Shell cho từng node:
-#   for ip in 192.168.8.2 192.168.8.3 192.168.8.4; do
+#   for ip in 192.168.8.2 192.168.8.3 192.168.8.4 192.168.8.6; do   # worker mới: join-worker.sh tự chạy script này
 #     ssh -o StrictHostKeyChecking=accept-new ubuntu@$ip 'bash -s' < node-prep.sh
 #   done
 set -euo pipefail

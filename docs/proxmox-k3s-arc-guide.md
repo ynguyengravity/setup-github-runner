@@ -1,15 +1,44 @@
 # Self-hosted GitHub Runner autoscale trên Proxmox với k3s + ARC
 
-Cập nhật lần cuối: 2026-10-22 · @Y Nguyen
+Cập nhật lần cuối: 2026-10-23 · @Y Nguyen
 
-Tài liệu này có hai phần. Phần đầu là **hồ sơ hiện trạng**: hệ thống đang chạy thế nào, mọi giá trị cụ thể nằm ở đâu, các quyết định đã chốt và các sự cố đã gặp. Phần sau là **hướng dẫn vận hành và dựng lại** từ đầu. Đọc mục 1–5 là đủ để nắm toàn bộ bối cảnh mà không cần lục lại lịch sử chat.
+Tài liệu này có hai phần. Phần đầu là **hồ sơ hiện trạng**: hệ thống đang chạy thế nào, mọi giá trị cụ thể nằm ở đâu, các quyết định đã chốt và các sự cố đã gặp. Phần sau là **hướng dẫn vận hành và dựng lại** từ đầu. Đọc mục 0–5 là đủ để nắm toàn bộ bối cảnh mà không cần lục lại lịch sử chat.
 
-Tài liệu liên quan:
+## 0. Nguồn sự thật và quy tắc cập nhật
+
+**Tài liệu này là nguồn bối cảnh duy nhất của hệ thống.** Thông tin nào không có ở đây coi như không ai biết. Khi tài liệu khác với thực tế, phải sửa tài liệu ngay.
+
+**Ký hiệu xác minh** dùng trong mục 1–2:
+
+- ✅ **Đã xác minh**: kèm ngày và cách xác minh (output lệnh, log job).
+- ⚠️ **Chưa xác minh**: mới làm theo kế hoạch hoặc suy ra, chưa có output chứng minh.
+
+Giá trị không có ký hiệu lấy từ output thật trong quá trình dựng hệ thống, ở ngày ghi trong mục 1.12.
+
+**Kiểm tra lệch giữa tài liệu và thực tế:** chạy [`scripts/state-check.sh`](../scripts/state-check.sh) trong Proxmox Shell. Script chỉ đọc, không in secret. Nó in hiện trạng của host, các VM, k3s, Helm/ARC, registry và image trên từng worker. Đối chiếu từng dòng với mục 1, chỗ nào khác thì sửa tài liệu (hoặc sửa hệ thống) rồi ghi vào mục 1.12.
+
+**Mỗi khi thay đổi hệ thống, cập nhật trong cùng một commit:**
+
+1. **Bảng hiện trạng** ở mục 1.1–1.11 có liên quan.
+2. **Mục 1.12:** thêm một dòng lịch sử, ghi ngày và Helm revision nếu có.
+3. **Mục 2:** đánh dấu xong hoặc thêm việc mới.
+4. **File cấu hình** trong repo (`k8s/`, `mirror/`, `scripts/k3s-plan.env.example`): phải trùng với bản đang chạy.
+5. **Mục 5** nếu gặp lỗi mới: ghi triệu chứng, nguyên nhân và cách xử lý.
+
+Tài liệu và file liên quan:
 
 - [docs/github-app.md](github-app.md): GitHub App `gravityactionvn`, private key, đổi key và các lỗi xác thực.
-- [scripts/](../scripts/): `pve-discovery.sh` (kiểm tra host), `pve-create-vms.sh` (tạo VM), `node-prep.sh` (chuẩn bị OS), `k3s-plan.env.example` (kế hoạch).
-- [k8s/](../k8s/): `controller-values.yaml` và `runner-values.yaml`, đúng bản đang cài.
-- [mirror/](../mirror/): `config.yml` và `compose.yaml` của registry mirror, đúng bản đang chạy.
+- [scripts/](../scripts/):
+    - `pve-discovery.sh`: kiểm tra host trước khi dựng.
+    - `pve-create-vms.sh`: tạo VM.
+    - `node-prep.sh`: chuẩn bị OS.
+    - `join-worker.sh`: đưa worker vào cụm.
+    - `resize-worker.sh`: đổi vCPU, RAM hoặc disk của worker.
+    - `state-check.sh`: in hiện trạng thật để đối chiếu với tài liệu.
+    - `k3s-plan.env.example`: kế hoạch IP, VMID, cấu hình VM.
+- [k8s/](../k8s/): `controller-values.yaml`, `runner-values.yaml`, `runner-sudoers.yaml` (ConfigMap), `registries.yaml` (containerd). Đây là đúng bản đang cài.
+- [mirror/](../mirror/): `config.yml` và `compose.yaml` (cache Docker Hub ở cổng 5000, registry nội bộ ở cổng 5001), đúng bản đang chạy.
+- [runner-image/](../runner-image/): `Dockerfile` và `build.sh` của image `vn-gaqc-runner`.
 
 ---
 
@@ -18,11 +47,11 @@ Tài liệu liên quan:
 ### 1.1 Tóm tắt
 
 - **Trạng thái:** đang chạy production cho `runs-on: vn-gaqc-docker` từ 2026-10-22 khoảng 15:00 UTC. Đã chạy thật job `SonarQube-Scan` của repo `gg-ai-command-center-app`.
-- **Quy mô:** `minRunners: 0`, `maxRunners: 18` (phương án A, 2026-10-22), mỗi pod request 1 CPU. Mỗi job chạy trong một pod riêng, xong job thì pod bị xoá. Giới hạn thật là CPU của host (mục 1.9).
+- **Quy mô:** `minRunners: 0`, `maxRunners: 40` (phương án B, 2026-10-23), 3 worker, mỗi pod request 0,7 CPU. Mỗi job chạy trong một pod riêng, xong job thì pod bị xoá. Giới hạn thật là CPU của host, khoảng 15–18 thread cho cụm (mục 1.9).
 - **Tương thích với LXC cũ:**
     - 2026-10-22: job chạy bằng root, `sudo` dùng được, có `docker compose`. Các job screenshot, check-console và SonarQube đều chạy được.
     - Lúc đó image chuẩn chưa có browser, nên bước "Install browsers" mất khoảng 6 phút mỗi job.
-    - 2026-10-23: đã build image nội bộ `vn-gaqc-runner` có sẵn browser (mục 1.4). Bước tiếp theo là `helm upgrade` sang image này và đo lại thời gian job (TODO).
+    - 2026-10-23: đã build image nội bộ `vn-gaqc-runner` có sẵn browser (mục 1.4). `k8s/runner-values.yaml` trong repo đã trỏ tới image này, và lần `helm upgrade` của phương án B dùng file đó. ⚠️ **Chưa xác minh** scale set đang chạy image mới: kiểm tra bằng `state-check.sh` (phần Helm, dòng `image:`) hoặc bằng `google-chrome --version` trong pod (mục 2).
 - **Runner LXC cũ:** đã xoá hết (111–135 và 100–110) ngày 2026-10-22. Không còn đường quay lại hệ thống cũ.
 
 ```mermaid
@@ -34,13 +63,14 @@ flowchart TB
             SRV["k3s-server-1 · 192.168.8.2 · VMID 201<br/>control plane + etcd<br/>ARC controller + listener"]
             W1["k3s-worker-1 · 192.168.8.3 · VMID 211<br/>runner pod (runner + dind)"]
             W2["k3s-worker-2 · 192.168.8.4 · VMID 212<br/>runner pod (runner + dind)"]
+            W3["k3s-worker-3 · 192.168.8.6 · VMID 213<br/>runner pod (runner + dind)"]
         end
-        MIR["registry-mirror · 192.168.8.5 · VMID 220<br/>registry:3 :5000"]
+        MIR["registry-mirror · 192.168.8.5 · VMID 220<br/>:5000 cache Docker Hub · :5001 image vn-gaqc-runner"]
     end
     SRV -- "long-poll HTTPS (GitHub App gravityactionvn)" --> GH
-    SRV -- "tạo / xoá pod" --> W1 & W2
-    W1 & W2 -- "chạy job, báo kết quả" --> GH
-    W1 & W2 -- "docker pull" --> MIR
+    SRV -- "tạo / xoá pod" --> W1 & W2 & W3
+    W1 & W2 & W3 -- "chạy job, báo kết quả" --> GH
+    W1 & W2 & W3 -- "kéo image, docker pull" --> MIR
     MIR -- "lần đầu" --> DH
 ```
 
@@ -53,14 +83,15 @@ flowchart TB
 | CPU / RAM | Intel Xeon Silver 4109T, 32 thread / 376,5 GiB |
 | Tải CPU (2026-10-22) | Bận 73–89% khi còn chạy các LXC runner cũ. Phần lớn đến từ 11 LXC 100–110 và các VM khác |
 | Ổ đĩa | `sda`, `sdb` 893,8 GB và `sdc` 3,5 TB (PERC H740P, SSD) |
-| Storage | `local-lvm` (LVM-thin, còn khoảng 40 GB), `local-lvm2` (LVM thick, còn khoảng 1762 GB sau khi xoá LXC). **Cụm dùng `local-lvm2`** |
+| Các VM khác trên host | `Maintain-Local` (205, 10 vCPU / 64 GiB, dùng khoảng 9 thread liên tục), `Cullat`, `Cullat6`–`Cullat10` (254–259, mỗi VM 8 vCPU / 16 GiB, tổng dùng khoảng 3 thread) |
+| Storage | `local-lvm` (LVM-thin, còn khoảng 40 GB), `local-lvm2` (LVM thick). **Cụm dùng `local-lvm2`**. Dung lượng trống: 348 GB → 1762 GB sau khi xoá LXC 111–135 → 2392 GB sau khi xoá LXC 100–110 (22/10). Sau đó phương án B lấy thêm khoảng 400 GB (VM 213, disk 150 GB; 211/212 nâng lên 150 GB), nên ước tính còn khoảng 2000 GB. ⚠️ Số mới nhất xem bằng `state-check.sh` |
 | Storage `local` | `/var/lib/vz`, đã bật content **Snippets** |
 | `vmbr0` | LAN `10.128.6.102/24`, gateway `10.128.6.1`, chạy trên `bond0` (LACP `ens1f0np0` + `ens1f1np1`) |
 | `vmbr1` | `192.168.8.1/22`, không gắn card vật lý, NAT ra `vmbr0` (MASQUERADE) |
 | DHCP trên `vmbr1` | `dhcpd` (ISC) chạy trên host, cấp `192.168.8.10`–`192.168.11.254`, DNS `10.128.6.2`, `8.8.8.8` (file `/etc/dhcp/dhcpd.conf`) |
-| IP tĩnh còn trống ngoài dải DHCP | `192.168.8.6`–`.9` (cụm đang dùng `.2`–`.5`) |
+| IP tĩnh ngoài dải DHCP | Đang dùng `.2` (server), `.3`, `.4`, `.6` (worker), `.5` (mirror). **Còn trống: `.7`, `.8`, `.9`** |
 | MTU đường ra Internet | Khoảng 1480, đã có **MSS clamp 1440** cho `192.168.8.0/22` (mục 6.2) |
-| Backup job | Chưa có. Khi tạo, nhớ exclude 211, 212, 220 |
+| Backup job | Chưa có (discovery 22/10). Khi tạo, nhớ exclude 211, 212, 213, 220 |
 | SSH key quản trị | `/root/.ssh/id_ed25519` (tạo ngày 2026-10-22, comment `proxmox-k3s-admin`). Public key đã được cài vào user `ubuntu` của mọi VM |
 
 ### 1.3 VM của cụm
@@ -69,21 +100,21 @@ flowchart TB
 | --- | --- | --- | --- | --- |
 | 9000 | `ubuntu-2404-k3s-tpl` | – | 2 / 2 GiB / 3,5 GB | Template cloud-init Ubuntu 24.04 (noble), tag `k3s` |
 | 201 | `k3s-server-1` | `192.168.8.2` | 2 / 4 GiB / 30 GB | k3s server (embedded etcd), có taint `CriticalAddonsOnly`; chạy ARC controller và listener |
-| 211 | `k3s-worker-1` | `192.168.8.3` | 10 / 16 GiB / 100 GB | k3s agent, label `gha-runner=true`, chạy runner pod. Nâng từ 8 lên 10 vCPU ngày 2026-10-22 (phương án A) |
-| 212 | `k3s-worker-2` | `192.168.8.4` | 10 / 16 GiB / 100 GB | Như worker-1 |
-| 213 | `k3s-worker-3` | `192.168.8.6` | 12 / 20 GiB / 150 GB | **Kế hoạch B (chưa tạo):** worker thứ 3. Cùng lúc nâng 211/212 lên 12 / 20 / 150 và đặt `cpuunits 50` cho cả 3 worker |
+| 211 | `k3s-worker-1` | `192.168.8.3` | 12 / 20 GiB / 150 GB | k3s agent, label `gha-runner=true`, chạy runner pod, `cpuunits 50`. Lịch sử: 8 → 10 vCPU (phương án A, 22/10) → 12 / 20 / 150 (phương án B, 23/10) |
+| 212 | `k3s-worker-2` | `192.168.8.4` | 12 / 20 GiB / 150 GB | Như worker-1 |
+| 213 | `k3s-worker-3` | `192.168.8.6` | 12 / 20 GiB / 150 GB | Như worker-1. Tạo ngày 2026-10-23 bằng `pve-create-vms.sh` + `join-worker.sh` |
 | 220 | `registry-mirror` | `192.168.8.5` | 2 / 4 GiB / 50 GB | Docker + `registry:3`, cache Docker Hub |
 
-Chung cho mọi VM: `--balloon 0`, `--cpu host`, `virtio-scsi-single` + `iothread`, full clone trên `local-lvm2`, `--onboot 1`, `--startup order` (server = 1, còn lại = 2), gateway `192.168.8.1`, DNS `10.128.6.2 8.8.8.8`, user `ubuntu`. Mật khẩu console nằm trong password manager. Worker 10 vCPU có allocatable khoảng 9 CPU và 13,1 GiB RAM. Mỗi pod request 1 CPU, nên mỗi worker chứa được 9 runner.
+Chung cho mọi VM: `--balloon 0`, `--cpu host`, `virtio-scsi-single` + `iothread`, full clone trên `local-lvm2`, `--onboot 1`, `--startup order` (server = 1, còn lại = 2), gateway `192.168.8.1`, DNS `10.128.6.2 8.8.8.8`, user `ubuntu`. Mật khẩu console nằm trong password manager. Worker 12 vCPU / 20 GiB có allocatable 11 CPU và khoảng 17 GiB RAM (`17869236Ki`). Mỗi pod request 0,7 CPU, nên mỗi worker chứa được 15 runner, 3 worker là 45 slot.
 
 ### 1.4 Phần mềm và phiên bản
 
-| Thành phần | Phiên bản (2026-10-22) | Ghi chú |
+| Thành phần | Phiên bản (cập nhật 2026-10-23) | Ghi chú |
 | --- | --- | --- |
 | OS của VM | Ubuntu 24.04.5 LTS, kernel 6.8.0-147 | Cloud image `noble-server-cloudimg-amd64.img` |
 | k3s | `v1.36.5+k3s1` (containerd 2.3.4) | Cài qua `get.k3s.io` với `INSTALL_K3S_VERSION`, flannel `host-gw`, đã tắt traefik và servicelb |
 | ARC (2 chart) | `0.15.0` | `gha-runner-scale-set-controller` + `gha-runner-scale-set` |
-| Runner image | `192.168.8.5:5001/vn-gaqc-runner:2.338.1-202610230022` (build ngày 2026-10-23) | Image tự build từ `ghcr.io/actions/actions-runner:2.338.1`, có sẵn Chrome, Edge, Firefox, Node 24, Playwright, AWS CLI, OpenVPN, `docker compose`, sudo cho root ([runner-image/](../runner-image/)). Build lại khoảng hằng tháng bằng `build.sh` (mục 3) |
+| Runner image | `192.168.8.5:5001/vn-gaqc-runner:2.338.1-202610230022` (build ngày 2026-10-23; ⚠️ chưa xác minh đang chạy, xem mục 1.1) | Image tự build từ `ghcr.io/actions/actions-runner:2.338.1`, có sẵn Chrome, Edge, Firefox, Node 24, Playwright, AWS CLI, OpenVPN, `docker compose`, sudo cho root ([runner-image/](../runner-image/)). Build lại khoảng hằng tháng bằng `build.sh` (mục 3) |
 | dind | `docker:dind` (Docker 29.9.2 lúc cài) | Chưa pin version |
 | `docker compose` trong runner | Plugin compose v5.x, lấy từ image `docker:dind` qua init container `init-compose-plugin` | Thêm ngày 2026-10-22: image runner chuẩn không có compose |
 | helm | v3.22.1 | Cài trên `k3s-server-1` |
@@ -107,7 +138,7 @@ Chung cho mọi VM: `--balloon 0`, `--cpu host`, `virtio-scsi-single` + `iothrea
 
 | Máy | Đường dẫn | Nội dung |
 | --- | --- | --- |
-| Proxmox host | `/root/selfhost-auto-scale/` | `k3s-plan.env`, `pve-discovery.sh`, `pve-create-vms.sh`, `node-prep.sh`, tải từ repo (mục 6.1) |
+| Proxmox host | `/root/selfhost-auto-scale/` | `k3s-plan.env`, `pve-discovery.sh`, `pve-create-vms.sh`, `node-prep.sh`, `join-worker.sh`, `resize-worker.sh` (tải từ repo, mục 6.1); thư mục con `runner-image/` (`Dockerfile`, `build.sh`) |
 | Proxmox host | `/root/k3s-token` | Token của cụm k3s (quyền 600) |
 | Proxmox host | `/root/.ssh/id_ed25519` | Private key SSH vào các VM |
 | Proxmox host | `/etc/network/interfaces` | Khối `vmbr1`: NAT + MSS clamp (mục 6.2) |
@@ -115,7 +146,7 @@ Chung cho mọi VM: `--balloon 0`, `--cpu host`, `virtio-scsi-single` + `iothrea
 | Proxmox host | `/var/lib/vz/snippets/k3s-vendor.yaml` | cloud-init vendor-data: cài `qemu-guest-agent`, `curl`, `chrony` |
 | Proxmox host | `/var/lib/vz/template/iso/noble-server-cloudimg-amd64.img` | Cloud image dùng để tạo template |
 | Mọi node k3s | `/etc/rancher/k3s/config.yaml` | Config k3s (có token) |
-| Mọi node k3s | `/etc/rancher/k3s/registries.yaml` | Trỏ `docker.io` tới mirror `192.168.8.5:5000` |
+| Mọi node k3s | `/etc/rancher/k3s/registries.yaml` | Trỏ `docker.io` tới mirror `192.168.8.5:5000` và khai báo registry nội bộ `192.168.8.5:5001` (http). Bản trong repo: [k8s/registries.yaml](../k8s/registries.yaml) |
 | Mọi node k3s | `/etc/sysctl.d/90-k3s-runners.conf`, `/etc/apt/apt.conf.d/52unattended-no-reboot` | Tạo bởi `node-prep.sh` |
 | `k3s-server-1` | `~/controller-values.yaml`, `~/runner-values.yaml` | Values đang cài. Bản sao trong repo: [k8s/](../k8s/) |
 | `k3s-server-1` | `~/.kube/config`, `~/.bashrc` (`KUBECONFIG`, `ARC_VERSION`, `RUNNER_VERSION`), `/etc/environment` (`KUBECONFIG`) | Để `kubectl`/`helm` chạy được, cả khi chạy qua SSH một dòng |
@@ -236,6 +267,8 @@ Mỗi pod có 2 container chính: `runner` (chạy các step của job) và `din
 | 2026-10-22 | Xoá LXC 100–110 (hết runner cũ): `local-lvm2` lên 2392 GB trống. CPU host vẫn bận khoảng 69%, chủ yếu do `Maintain-Local` và job của cụm (mục 1.9) |
 | 2026-10-22, khoảng 16:52 UTC | Phương án A: `resize-worker.sh` nâng 211/212 lên 10 vCPU; request 1 CPU/pod; `maxRunners: 18` (Helm revision 5) |
 | 2026-10-23 | Thêm `registry-local` (cổng 5001) trên VM mirror và `registries.yaml` mới trên 3 node; build image `vn-gaqc-runner:2.338.1-202610230022` |
+| 2026-10-23 | Phương án B: `resize-worker.sh` nâng 211/212 lên 12 vCPU / 20 GiB / 150 GB; tạo 213 (`k3s-worker-3`, `.6`) bằng `pve-create-vms.sh` + `join-worker.sh`; `cpuunits 50` cho 3 worker; request 0,7 CPU/pod; `maxRunners: 40`. ✅ Đã xác minh bằng output `kubectl get nodes` (3 worker allocatable 11 CPU, khoảng 17 GiB) và `autoscalingrunnerset` (MAX 40) |
+| 2026-10-23 | Thêm `scripts/state-check.sh` và mục 0 (quy tắc nguồn sự thật); `build.sh` tự lấy danh sách worker từ cụm |
 
 Xem lịch sử Helm: `helm history vn-gaqc-docker -n arc-runners` và `helm history arc -n arc-systems`.
 
@@ -244,11 +277,12 @@ Xem lịch sử Helm: `helm history vn-gaqc-docker -n arc-runners` và `helm his
 ## 2. Việc còn lại (TODO)
 
 - [ ] Theo dõi 1–2 ngày: job `vn-gaqc-docker` xanh, không có OOM hay evict, thời gian chờ runner hợp lý.
-- [ ] Chạy load test 16 job (mục 6.9) để xác nhận cụm scale lên 8, xếp hàng đúng và về lại 0.
+- [ ] Chạy `state-check.sh` và đối chiếu với mục 1. Sửa các chỗ ⚠️ thành ✅ (hoặc sửa lại giá trị).
+- [ ] Chạy load test (mục 6.9) để xác nhận cụm chạy song song đúng số job, xếp hàng phần còn lại và về lại 0.
 - [x] Đã xoá LXC cũ 100–135 (2026-10-22).
 - [ ] Xoá các runner `github-runner-*` còn Offline trên GitHub (Org → Settings → Actions → Runners).
 - [x] Phương án A (2026-10-22): 211 và 212 lên 10 vCPU (allocatable 9 CPU), `maxRunners: 18`, request 1 CPU/pod (Helm revision 5).
-- [ ] Phương án B (mục 1.9): `resize-worker.sh` cho 211/212 (12 / 20 / 150) → `pve-create-vms.sh` tạo 213 → `join-worker.sh 192.168.8.6 <runner-image>` → `qm set <id> --cpuunits 50` cho 211/212/213 → `helm upgrade` với `maxRunners: 40`, request 0,7 CPU/pod.
+- [x] Phương án B (2026-10-23): 3 worker × 12 vCPU / 20 GiB / 150 GB (allocatable 11 CPU), `cpuunits 50`, request 0,7 CPU/pod, `maxRunners: 40`.
 - [ ] Sau khi chạy B: theo dõi CPU host và thời gian job browser. Nếu job bị timeout, giảm `maxRunners` về 24–30.
 - [ ] (Tuỳ chọn) Dọn swap của host lúc rảnh: `swapoff -a && swapon -a`.
 - [ ] Nếu cần nhiều hơn khoảng 18 job browser chạy cùng lúc: chọn giữa thêm host, dời `Maintain-Local`, `runOnExternal`, hoặc chạy headless (mục 1.9).
@@ -259,7 +293,7 @@ Xem lịch sử Helm: `helm history vn-gaqc-docker -n arc-runners` và `helm his
 - [ ] Ghi lại người quản lý App `gravityactionvn` và người có quyền Owner của org vào mục 1.5.
 - [x] Registry nội bộ `192.168.8.5:5001` (service `registry-local` trên VM mirror) và `registries.yaml` mới trên 3 node (2026-10-23).
 - [x] Build image `192.168.8.5:5001/vn-gaqc-runner:2.338.1-202610230022` bằng [runner-image/build.sh](../runner-image/build.sh), đã kéo sẵn về 2 worker (2026-10-23). Image chỉ nằm trong mạng nội bộ, không đưa lên ghcr.
-- [ ] `helm upgrade` scale set sang image mới, kiểm tra trong pod (`google-chrome --version`, `sudo -n true`, `docker compose version`), chạy lại run screenshot và so thời gian (trước đó: khoảng 8 phút/job, riêng Install browsers khoảng 6 phút, 73 job với `max-parallel: 10`).
+- [ ] ⚠️ Xác minh scale set đang chạy image `vn-gaqc-runner` (`helm get values vn-gaqc-docker -n arc-runners | grep image:`). Nếu chưa, chạy `helm upgrade` với `~/runner-values.yaml` trùng bản trong repo. Kiểm tra trong pod: `google-chrome --version`, `sudo -n true`, `docker compose version`. Sau đó chạy lại run screenshot và so thời gian (trước đó: khoảng 8 phút/job, riêng Install browsers khoảng 6 phút, 73 job với `max-parallel: 10`).
 - [ ] Sau vài run ổn định: bỏ ConfigMap `runner-sudoers` và init container compose khỏi `runner-values.yaml`, vì image đã có sẵn cả hai.
 - [ ] (Repo screenshot) Cân nhắc tăng `max-parallel` từ 10 lên 16–18 để dùng hết sức chứa của cụm.
 - [ ] (Tuỳ chọn) Pin `docker:dind` theo major, gắn monitoring (Prometheus) và cảnh báo.
@@ -289,7 +323,7 @@ helm upgrade vn-gaqc-docker -n arc-runners -f ~/runner-values.yaml --version "${
   oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set
 ```
 
-Sau đó cập nhật [k8s/runner-values.yaml](../k8s/runner-values.yaml) trong repo cho khớp. Hai worker 8 vCPU / 16 GiB chứa được khoảng 20 runner. Giới hạn thật là CPU rảnh của host, xem bằng `pve-discovery.sh`.
+Sau đó cập nhật [k8s/runner-values.yaml](../k8s/runner-values.yaml) trong repo cho khớp. Sức chứa hiện tại là 45 slot (3 worker × 15, mục 1.9). Giới hạn thật là CPU rảnh của host, xem bằng lệnh đo CPU bên dưới.
 
 **Tạm dừng nhận job** (job đang chạy vẫn chạy cho xong, job mới xếp hàng):
 
@@ -301,21 +335,16 @@ helm upgrade vn-gaqc-docker -n arc-runners -f ~/runner-values.yaml --version "${
   oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set
 ```
 
-**Cập nhật runner image** (khoảng hằng tháng, bắt buộc: GitHub ngừng giao job cho runner quá cũ):
+**Cập nhật runner version** (khoảng hằng tháng, bắt buộc: GitHub ngừng giao job cho runner quá cũ). Image `vn-gaqc-runner` build từ `ghcr.io/actions/actions-runner:<version>`, nên chỉ cần build lại với version mới:
 
 ```bash
-# k3s-server-1
+# Proxmox Shell: lấy version mới nhất rồi build (script tự kéo sẵn image về mọi worker)
 NEW=$(curl -s https://api.github.com/repos/actions/runner/releases/latest | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p'); echo "$NEW"
-sed -i "s#actions-runner:[0-9.]*#actions-runner:${NEW}#g" ~/runner-values.yaml && grep -n 'actions-runner:' ~/runner-values.yaml
-# Proxmox Shell: kéo sẵn image
-for ip in 192.168.8.3 192.168.8.4; do ssh ubuntu@$ip "sudo k3s crictl pull ghcr.io/actions/actions-runner:<NEW>"; done
-# k3s-server-1
-helm upgrade vn-gaqc-docker -n arc-runners -f ~/runner-values.yaml --version "${ARC_VERSION}" \
-  oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set
-sed -i "s/^export RUNNER_VERSION=.*/export RUNNER_VERSION=${NEW}/" ~/.bashrc
+cd /root/selfhost-auto-scale/runner-image && bash build.sh "$NEW"
+# k3s-server-1: chạy lệnh sed + helm upgrade mà build.sh in ra
 ```
 
-Cập nhật luôn bảng phiên bản ở mục 1.4 và file [k8s/runner-values.yaml](../k8s/runner-values.yaml).
+Sau đó cập nhật mục 1.4, mục 1.12 và [k8s/runner-values.yaml](../k8s/runner-values.yaml).
 
 **Build image runner nội bộ `vn-gaqc-runner`** (Proxmox Shell; build trên VM mirror, push vào `192.168.8.5:5001`, kéo sẵn về worker):
 
@@ -357,7 +386,7 @@ pvesh get /cluster/resources --type vm --output-format json | python3 -c '
 import json,sys
 d=[v for v in json.load(sys.stdin) if v.get("status")=="running" and v.get("type")=="qemu"]
 d.sort(key=lambda v:-v.get("cpu",0)*v.get("maxcpu",0))
-k3s={201,211,212,220}; s={"k3s":0,"khác":0}
+k3s={201,211,212,213,220}; s={"k3s":0,"khác":0}
 for v in d:
     t=v.get("cpu",0)*v.get("maxcpu",0); s["k3s" if v["vmid"] in k3s else "khác"]+=t
     print(f"{v["vmid"]:>5} {v.get("name",""):<18} {t:5.1f} thread /{v.get("maxcpu",0):>3} vCPU  RAM {v.get("mem",0)/2**30:5.1f}/{v.get("maxmem",0)/2**30:5.1f} GiB")
@@ -389,17 +418,17 @@ Rollback chỉ đổi cấu hình scale set. Nếu bản lỗi còn liên quan t
 
 ```bash
 cd /root/selfhost-auto-scale
-bash resize-worker.sh 211 k3s-worker-1 10            # chỉ vCPU
-bash resize-worker.sh 212 k3s-worker-2 10 24 150     # vCPU, RAM (GiB), disk (GB, chỉ tăng)
+bash resize-worker.sh 211 k3s-worker-1 14            # chỉ vCPU
+bash resize-worker.sh 212 k3s-worker-2 12 24 200     # vCPU, RAM (GiB), disk (GB, chỉ tăng)
 ```
 
-Làm lần lượt từng worker. Sau đó chỉnh `maxRunners` cho khớp (mỗi worker chứa được khoảng `vCPU − 1` pod), và cập nhật mục 1.3.
+Làm lần lượt từng worker. Sau đó chỉnh `maxRunners` cho khớp: mỗi worker chứa được khoảng `(vCPU − 1) / 0,7` pod theo CPU, và còn phải đủ RAM (1 GiB/pod) và disk (6 GB/pod). Cập nhật mục 1.3 và 1.9.
 
 **Thêm worker:**
 
-1. Trong `/root/selfhost-auto-scale/k3s-plan.env`, đổi `WORKER_IDS="211 212 213"` và `WORKER_IPS="192.168.8.3 192.168.8.4 192.168.8.6"`.
+1. Trong `/root/selfhost-auto-scale/k3s-plan.env`, thêm VMID và IP mới, ví dụ `WORKER_IDS="211 212 213 214"` và `WORKER_IPS="192.168.8.3 192.168.8.4 192.168.8.6 192.168.8.7"`.
 2. Chạy `set -a; source k3s-plan.env; set +a`, rồi `bash pve-discovery.sh`, rồi `DRY_RUN=1 bash pve-create-vms.sh`, rồi `bash pve-create-vms.sh`. VM đã có sẽ được bỏ qua.
-3. Đưa VM mới vào cụm: `bash join-worker.sh 192.168.8.6 <runner-image>`. Script chạy node-prep, ghi `registries.yaml`, cài k3s agent đúng version của server, chờ node Ready, rồi kéo sẵn image. Lấy `<runner-image>` từ `grep -m1 vn-gaqc-runner ~/runner-values.yaml` trên server.
+3. Đưa VM mới vào cụm: `bash join-worker.sh 192.168.8.7 <runner-image>`. Script chạy node-prep, ghi `registries.yaml`, cài k3s agent đúng version của server, chờ node Ready, rồi kéo sẵn image. Lấy `<runner-image>` từ `grep -m1 vn-gaqc-runner ~/runner-values.yaml` trên server.
 4. `qm set <id> --cpuunits 50`, rồi tăng `maxRunners` cho khớp sức chứa mới.
 
 Mỗi worker 12 vCPU / 20 GiB thêm khoảng 15 slot (request 0,7 CPU/pod). Cập nhật mục 1.3.
@@ -426,7 +455,7 @@ Mỗi worker 12 vCPU / 20 GiB thêm khoảng 15 slot (request 0,7 CPU/pod). Cậ
 | Registry mirror ẩn danh | Không có tài khoản Docker Hub. Cache giảm số lần pull | Tài khoản + token (thêm sau nếu gặp `toomanyrequests`) |
 | Embedded etcd (`cluster-init`) | Sau này nâng lên 3 server HA mà không phải cài lại | SQLite |
 
-Request/limit của mỗi runner pod: runner 250m CPU / 512Mi (limit 2Gi), dind 250m / 512Mi (limit 2Gi). Không đặt CPU limit. `emptyDir`: work 10Gi, Docker 20Gi. Sau khoảng 1 tuần chạy thật, chỉnh request về mức dùng p90 (`kubectl top pod -n arc-runners --containers`).
+Request/limit của mỗi runner pod (phương án B): runner 200m CPU / 512Mi (limit 2Gi), dind 500m / 512Mi (limit 2Gi). Không đặt CPU limit. Ephemeral storage request: runner 2Gi, dind 4Gi. `emptyDir`: work 10Gi, Docker 20Gi. Sau khoảng 1 tuần chạy thật, chỉnh request về mức dùng p90 (`kubectl top pod -n arc-runners --containers`).
 
 ### Rủi ro bảo mật đã chấp nhận
 
@@ -540,10 +569,10 @@ Script lần lượt: ghi snippet, tải cloud image (kiểm tra SHA256), tạo 
 ### 6.5 Chuẩn bị OS (`node-prep.sh`)
 
 ```bash
-for ip in 192.168.8.2 192.168.8.3 192.168.8.4; do
-  ssh -o StrictHostKeyChecking=accept-new ubuntu@$ip 'bash -s' < node-prep.sh
-done
-# Mong đợi: inotify=8192, swap: off, time: Normal; worker cpu=8 mem=15G disk=96G
+ssh -o StrictHostKeyChecking=accept-new ubuntu@192.168.8.2 'bash -s' < node-prep.sh    # server
+# Worker: join-worker.sh (mục 6.6) tự chạy node-prep.sh. Muốn chạy riêng thì:
+# for ip in 192.168.8.3 192.168.8.4 192.168.8.6; do ssh -o StrictHostKeyChecking=accept-new ubuntu@$ip 'bash -s' < node-prep.sh; done
+# Mong đợi: inotify=8192, swap: off, time: Normal
 ```
 
 Script tăng giới hạn inotify/file (mọi container dind dùng chung giới hạn inotify của root), tắt auto-reboot của unattended-upgrades và bật chrony.
@@ -578,23 +607,10 @@ etcd-snapshot-retention: 10
 EOF
 ssh ubuntu@192.168.8.2 "curl -sfL https://get.k3s.io | sudo INSTALL_K3S_VERSION='${K3S_VERSION}' sh -s - server"
 
-# Worker
-for ip in 192.168.8.3 192.168.8.4; do
-  ssh ubuntu@$ip "sudo mkdir -p /etc/rancher/k3s && sudo tee /etc/rancher/k3s/config.yaml >/dev/null" <<EOF
-server: "https://192.168.8.2:6443"
-token: "${K3S_TOKEN}"
-node-label:
-  - "gha-runner=true"
-kubelet-arg:
-  - "system-reserved=cpu=500m,memory=1Gi,ephemeral-storage=10Gi"
-  - "kube-reserved=cpu=500m,memory=1Gi,ephemeral-storage=5Gi"
-  - "eviction-hard=memory.available<500Mi,nodefs.available<10%,nodefs.inodesFree<5%,imagefs.available<10%"
-  - "max-pods=110"
-  - "image-gc-high-threshold=75"
-  - "image-gc-low-threshold=60"
-EOF
-  ssh ubuntu@$ip "curl -sfL https://get.k3s.io | sudo INSTALL_K3S_VERSION='${K3S_VERSION}' sh -s - agent"
-done
+# Worker: join-worker.sh lo node-prep, registries.yaml, config agent (label gha-runner=true,
+# kubelet reserved/eviction như trong script) và cài agent cùng version với server.
+# Image runner chưa có thì bỏ tham số thứ 2; kéo sau ở mục 6.8.
+for ip in 192.168.8.3 192.168.8.4 192.168.8.6; do bash join-worker.sh "$ip"; done
 
 # kubectl + helm cho user ubuntu trên server (cả khi chạy qua ssh một dòng)
 ssh ubuntu@192.168.8.2 'bash -s' <<'EOF'
@@ -625,11 +641,9 @@ curl -fsSL "$BASE/mirror/config.yml"   | ssh ubuntu@192.168.8.5 'sudo tee /opt/m
 curl -fsSL "$BASE/mirror/compose.yaml" | ssh ubuntu@192.168.8.5 'sudo tee /opt/mirror/compose.yaml >/dev/null'
 ssh ubuntu@192.168.8.5 'cd /opt/mirror && sudo docker compose up -d && sudo docker compose ps'
 
-for ip in 192.168.8.2 192.168.8.3 192.168.8.4; do
-  curl -fsSL "$BASE/k8s/registries.yaml" | ssh ubuntu@$ip "sudo tee /etc/rancher/k3s/registries.yaml >/dev/null"
-done
+# Worker đã có registries.yaml (join-worker.sh ghi); server thì ghi ở đây
+curl -fsSL "$BASE/k8s/registries.yaml" | ssh ubuntu@192.168.8.2 "sudo tee /etc/rancher/k3s/registries.yaml >/dev/null"
 ssh ubuntu@192.168.8.2 'sudo systemctl restart k3s'
-for ip in 192.168.8.3 192.168.8.4; do ssh ubuntu@$ip 'sudo systemctl restart k3s-agent'; done
 
 ssh ubuntu@192.168.8.3 'sudo k3s crictl pull docker.io/library/alpine:3.20'
 curl -s http://192.168.8.5:5000/v2/_catalog          # {"repositories":["library/alpine"]}
@@ -687,7 +701,7 @@ mkdir -p /root/selfhost-auto-scale/runner-image && cd /root/selfhost-auto-scale/
 curl -fsSL "$BASE/runner-image/Dockerfile" -o Dockerfile
 curl -fsSL "$BASE/runner-image/build.sh"   -o build.sh
 bash build.sh                                   # in ra tag mới, ví dụ 192.168.8.5:5001/vn-gaqc-runner:2.338.1-<thời gian>
-for ip in 192.168.8.3 192.168.8.4; do ssh ubuntu@$ip "sudo k3s crictl pull docker.io/library/docker:dind"; done
+# build.sh tự kéo sẵn image về mọi worker (label gha-runner=true); join-worker.sh đã kéo docker:dind
 ```
 
 Sửa 2 dòng `image:` trong `~/runner-values.yaml` thành tag vừa in ra; `build.sh` có in sẵn lệnh `sed` cho việc này. Nếu không build image riêng, có thể dùng thẳng `ghcr.io/actions/actions-runner:<version>`: job vẫn chạy được, chỉ phải tự cài browser ở mỗi job.
@@ -699,7 +713,7 @@ helm template vn-gaqc-docker -n arc-runners -f ~/runner-values.yaml --version "$
   oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set >/dev/null && echo VALUES_OK
 helm install vn-gaqc-docker --namespace arc-runners -f ~/runner-values.yaml --version "${ARC_VERSION}" \
   oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set
-kubectl get autoscalingrunnerset -n arc-runners    # vn-gaqc-docker 0 8 Running
+kubectl get autoscalingrunnerset -n arc-runners    # vn-gaqc-docker 0 40 Running
 kubectl get pods -n arc-systems -o wide            # ...-listener Running trên k3s-server-1
 kubectl logs -n arc-systems $(kubectl get pods -n arc-systems -o name | grep listener) | tail -20
 ```
@@ -758,7 +772,8 @@ watch -n2 'kubectl get autoscalingrunnerset -n arc-runners; kubectl get pods -n 
 
 Tiêu chí đạt:
 
-- 8 pod chạy cùng lúc, rải đều 2 worker. 8 job còn lại chờ rồi được nhận lần lượt.
+- 16 pod chạy cùng lúc (dưới `maxRunners: 40`), rải đều 3 worker (khoảng 5–6 pod mỗi worker).
+- Muốn thử xếp hàng thì dùng matrix lớn hơn `maxRunners`, ví dụ `a: [0..6]` × `b: [0..6]` = 49 job: 40 job chạy, 9 job chờ.
 - 16/16 job xanh, không có `toomanyrequests` hay `OOMKilled`/`Evicted` (kiểm tra bằng `kubectl get events -n arc-runners`).
 - Chạy xong thì về 0 pod.
 
@@ -803,7 +818,7 @@ pct list | awk 'NR == 1 || $NF ~ /^github-runner-/'
 
     Trong lúc làm, job xếp hàng trên GitHub (tối đa 24 giờ).
 - **k3s**: nâng từng minor một, server trước, worker sau. Mỗi node làm theo quy trình cordon ở mục 3, rồi chạy lại lệnh cài với `INSTALL_K3S_VERSION` mới (`sh -s - server` hoặc `sh -s - agent`). Config giữ nguyên. Không dùng system-upgrade-controller kèm drain tự động, vì nó sẽ evict runner đang chạy job.
-- **Lên 3 server HA**: tạo thêm 2 VM bằng IP `.6`/`.7`. Dùng config giống server đầu, chỉ thay `cluster-init: true` bằng `server: "https://192.168.8.2:6443"`, rồi cài với `sh -s - server`.
+- **Lên 3 server HA**: tạo thêm 2 VM bằng IP còn trống `.7`/`.8` (`.6` đã là worker 3). Dùng config giống server đầu, chỉ thay `cluster-init: true` bằng `server: "https://192.168.8.2:6443"`, rồi cài với `sh -s - server`.
 
 ---
 
