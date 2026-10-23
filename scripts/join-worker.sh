@@ -3,7 +3,7 @@
 # Chạy bằng root trên Proxmox host, trong /root/selfhost-auto-scale (cần node-prep.sh ở cùng thư mục).
 #
 #   bash join-worker.sh <ip> [runner-image]
-#   bash join-worker.sh 192.168.8.6 192.168.8.5:5001/vn-gaqc-runner:2.338.1-202610230022
+#   bash join-worker.sh 192.168.8.6 192.168.8.5:5001/vn-gaqc-runner:2.338.1-202610230904
 #
 # Các bước: node-prep.sh -> registries.yaml -> config + cài k3s agent (đúng version của server,
 # token /root/k3s-token) -> chờ node Ready -> kéo sẵn image runner + docker:dind.

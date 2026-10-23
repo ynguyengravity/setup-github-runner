@@ -117,7 +117,7 @@ Chung cho mọi VM: `--balloon 0`, `--cpu host`, `virtio-scsi-single` + `iothrea
 | OS của VM | Ubuntu 24.04.5 LTS, kernel 6.8.0-147 | Cloud image `noble-server-cloudimg-amd64.img` |
 | k3s | `v1.36.5+k3s1` (containerd 2.3.4) | Cài qua `get.k3s.io` với `INSTALL_K3S_VERSION`, flannel `host-gw`, đã tắt traefik và servicelb |
 | ARC (2 chart) | `0.15.0` (✅ 23/10) | `gha-runner-scale-set-controller` (release `arc`, revision 1) + `gha-runner-scale-set` (release `vn-gaqc-docker`, revision 7) |
-| Runner image | `192.168.8.5:5001/vn-gaqc-runner:2.338.1-202610230022` (✅ đang chạy, Helm revision 7; là tag duy nhất trong registry nội bộ). Image cũ `ghcr.io/actions/actions-runner:2.338.1` vẫn còn trong cache của worker 1 và 2, xoá cũng được | Image tự build từ `ghcr.io/actions/actions-runner:2.338.1`, có sẵn Chrome, Edge, Firefox, Node 24, Playwright, AWS CLI, OpenVPN, `docker compose`, sudo cho root ([runner-image/](../runner-image/)). Build lại khoảng hằng tháng bằng `build.sh` (mục 3) |
+| Runner image | `192.168.8.5:5001/vn-gaqc-runner:2.338.1-202610230022` (✅ đang chạy, Helm revision 7). Tag mới `2.338.1-202610230904` (có sẵn font và thư viện của `setup-browsers.sh`) ✅ đã build và push vào `:5001` ngày 2026-10-23 09:04 (output `build.sh`), ⚠️ chưa deploy (chờ `helm upgrade` ở phương án C). [k8s/runner-values.yaml](../k8s/runner-values.yaml) đã trỏ sẵn tới tag mới. Image cũ `ghcr.io/actions/actions-runner:2.338.1` vẫn còn trong cache của worker 1 và 2, xoá cũng được | Image tự build từ `ghcr.io/actions/actions-runner:2.338.1`, có sẵn Chrome, Edge, Firefox, Node 24, Playwright, AWS CLI, OpenVPN, `docker compose`, sudo cho root ([runner-image/](../runner-image/)). Build lại khoảng hằng tháng bằng `build.sh` (mục 3) |
 | dind | `docker:dind` (Docker 29.9.2 lúc cài) | Chưa pin version |
 | `docker compose` trong runner | Plugin compose v5.x, lấy từ image `docker:dind` qua init container `init-compose-plugin` | Thêm ngày 2026-10-22: image runner chuẩn không có compose |
 | helm | v3.22.1 | Cài trên `k3s-server-1` |
@@ -330,7 +330,7 @@ Xem lịch sử Helm: `helm history vn-gaqc-docker -n arc-runners` và `helm his
 - [x] Phương án A (2026-10-22): 211 và 212 lên 10 vCPU (allocatable 9 CPU), `maxRunners: 18`, request 1 CPU/pod (Helm revision 5).
 - [x] Phương án B (2026-10-23): 3 worker × 12 vCPU / 20 GiB / 150 GB (allocatable 11 CPU), `cpuunits 50`, request 0,7 CPU/pod, `maxRunners: 40`.
 - [ ] Phương án C (mục 1.9):
-    1. Build lại image (có font và thư viện).
+    1. ✅ Build lại image (có font và thư viện): `192.168.8.5:5001/vn-gaqc-runner:2.338.1-202610230904` (2026-10-23), đã kéo sẵn về 211/212/213.
     2. `resize-worker.sh` 211/212/213 lên RAM 32 GiB.
     3. Tạo 214 (`.7`) và `join-worker.sh`.
     4. ✅ `qm set 211/212/213 --cpuunits 300` (2026-10-23). Còn lại: `qm set 214 --cpuunits 300` sau khi tạo VM 214.
@@ -482,7 +482,7 @@ Làm lần lượt từng worker. Sau đó chỉnh `maxRunners` cho khớp: mỗ
 **Thêm worker:**
 
 1. Trong `/root/selfhost-auto-scale/k3s-plan.env`, thêm VMID và IP mới, ví dụ `WORKER_IDS="211 212 213 214"` và `WORKER_IPS="192.168.8.3 192.168.8.4 192.168.8.6 192.168.8.7"`.
-2. Chạy `set -a; source k3s-plan.env; set +a`, rồi `bash pve-discovery.sh`, rồi `DRY_RUN=1 bash pve-create-vms.sh`, rồi `bash pve-create-vms.sh`. VM đã có sẽ được bỏ qua.
+2. Chạy `unset SSH_PUBKEY; set -a; source k3s-plan.env; set +a`, rồi `bash pve-discovery.sh`, rồi `DRY_RUN=1 bash pve-create-vms.sh`, rồi `bash pve-create-vms.sh`. VM đã có (đúng VMID, tên và IP) sẽ được bỏ qua. Template 9000 đã có nên `CI_PASSWORD` không cần nhập: VM clone thừa hưởng mật khẩu console của template (nếu có), cảnh báo "Không có CI_PASSWORD" có thể bỏ qua.
 3. Đưa VM mới vào cụm: `bash join-worker.sh 192.168.8.7 <runner-image>`. Script chạy node-prep, ghi `registries.yaml`, cài k3s agent đúng version của server, chờ node Ready, rồi kéo sẵn image. Lấy `<runner-image>` từ `grep -m1 vn-gaqc-runner ~/runner-values.yaml` trên server.
 4. `qm set <id> --cpuunits 300` (bằng các worker khác), rồi tăng `maxRunners` cho khớp sức chứa mới.
 
