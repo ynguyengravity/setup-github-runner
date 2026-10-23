@@ -101,12 +101,12 @@ flowchart TB
 | --- | --- | --- | --- | --- |
 | 9000 | `ubuntu-2404-k3s-tpl` | – | 2 / 2 GiB / 3,5 GB | Template cloud-init Ubuntu 24.04 (noble), tag `k3s` |
 | 201 | `k3s-server-1` | `192.168.8.2` | 2 / 4 GiB / 30 GB | k3s server (embedded etcd), có taint `CriticalAddonsOnly`; chạy ARC controller và listener |
-| 211 | `k3s-worker-1` | `192.168.8.3` | 12 / 20 GiB / 150 GB | k3s agent, label `gha-runner=true`, chạy runner pod, `cpuunits 50`. Lịch sử: 8 → 10 vCPU (phương án A, 22/10) → 12 / 20 / 150 (phương án B, 23/10) |
+| 211 | `k3s-worker-1` | `192.168.8.3` | 12 / 20 GiB / 150 GB | k3s agent, label `gha-runner=true`, chạy runner pod, `cpuunits 300` (từ 23/10; trước đó 50). Lịch sử: 8 → 10 vCPU (phương án A, 22/10) → 12 / 20 / 150 (phương án B, 23/10) |
 | 212 | `k3s-worker-2` | `192.168.8.4` | 12 / 20 GiB / 150 GB | Như worker-1 |
 | 213 | `k3s-worker-3` | `192.168.8.6` | 12 / 20 GiB / 150 GB | Như worker-1. Tạo ngày 2026-10-23 bằng `pve-create-vms.sh` + `join-worker.sh` |
 | 220 | `registry-mirror` | `192.168.8.5` | 2 / 4 GiB / 50 GB | Docker + `registry:3`, cache Docker Hub |
 
-✅ Cấu hình VM trong bảng này đã xác minh ngày 2026-10-23 bằng `state-check.sh` (`qm config --current`): cores, RAM, disk, IP, `onboot 1`, `cpuunits 50` trên 211/212/213 (server và mirror giữ mặc định). Node k3s: 3 worker có allocatable CPU 11 và RAM khoảng 17 GiB, server có CPU 1 và RAM khoảng 1,8 GiB, tất cả đều `Ready` và chạy `v1.36.5+k3s1`.
+✅ Cấu hình VM trong bảng này đã xác minh ngày 2026-10-23 bằng `state-check.sh` (`qm config --current`): cores, RAM, disk, IP, `onboot 1`, `cpuunits 50` trên 211/212/213 (server và mirror giữ mặc định). Sau đó, cùng ngày, `cpuunits` của 211/212/213 được đổi thành 300 ✅ Đã xác minh ngày 2026-10-23: `qm pending` không có thay đổi chờ áp dụng, và `/sys/fs/cgroup/qemu.slice/<id>.scope/cpu.weight` = 300 trên cả 3 VM (áp dụng ngay khi VM đang chạy, không cần reboot). Node k3s: 3 worker có allocatable CPU 11 và RAM khoảng 17 GiB, server có CPU 1 và RAM khoảng 1,8 GiB, tất cả đều `Ready` và chạy `v1.36.5+k3s1`.
 
 Chung cho mọi VM: `--balloon 0`, `--cpu host`, `virtio-scsi-single` + `iothread`, full clone trên `local-lvm2`, `--onboot 1`, `--startup order` (server = 1, còn lại = 2), gateway `192.168.8.1`, DNS `10.128.6.2 8.8.8.8`, user `ubuntu`. Mật khẩu console nằm trong password manager. Trên giao diện Proxmox, "Memory usage" của worker luôn hiện khoảng 100%: với `--balloon 0`, Proxmox chỉ thấy RAM mà VM đã chiếm trên host, kể cả page cache. Muốn biết RAM job dùng thật thì xem `kubectl top nodes`. Worker 12 vCPU / 20 GiB có allocatable 11 CPU và khoảng 17 GiB RAM (`17869236Ki`). Mỗi pod request 0,7 CPU, nên mỗi worker chứa được 15 runner, 3 worker là 45 slot.
 
@@ -264,7 +264,7 @@ Kỳ vọng: 40 job browser cùng lúc được khoảng 0,8 thread mỗi job, n
 | Request mỗi pod | 0,7 CPU (dind 500m + runner 200m), 1 GiB RAM, 6 GB ephemeral |
 | Sức chứa mỗi worker | CPU 11 / 0,7 = 15 · RAM khoảng 17,5 / 1 = 17 · disk khoảng 120 / 6 = 20 → **15 pod** |
 | Tổng | 3 worker = **45 slot**, đặt `maxRunners: 40` |
-| `cpuunits` của worker | 50: cụm dùng CPU rảnh của host, nhưng khi host bận thì nhường cho các VM khác |
+| `cpuunits` của worker | 300 (từ 2026-10-23, phương án C; trước đó 50): khi host bận, cụm runner được ưu tiên CPU hơn các VM khác (mặc định 100) |
 
 Cách đánh giá hiệu năng:
 - 40 job nhẹ chạy cùng lúc thì ổn.
@@ -333,7 +333,7 @@ Xem lịch sử Helm: `helm history vn-gaqc-docker -n arc-runners` và `helm his
     1. Build lại image (có font và thư viện).
     2. `resize-worker.sh` 211/212/213 lên RAM 32 GiB.
     3. Tạo 214 (`.7`) và `join-worker.sh`.
-    4. `qm set 211/212/213/214 --cpuunits 300`.
+    4. ✅ `qm set 211/212/213 --cpuunits 300` (2026-10-23). Còn lại: `qm set 214 --cpuunits 300` sau khi tạo VM 214.
     5. `helm upgrade` với tag mới, limit RAM 4 GiB, `maxRunners: 40`.
     6. Đo lại một run screenshot. Mục tiêu: Install browsers dưới 1 phút, Process chunk khoảng 3–4 phút. Khi cụm đầy, chạy `vmstat 5 3` trên worker và xem cột `st` (CPU steal) để biết job còn chờ CPU hay không.
 - [ ] Sau khi chạy B: theo dõi CPU host và thời gian job browser. Nếu job bị timeout, giảm `maxRunners` về 24–30.
@@ -484,7 +484,7 @@ Làm lần lượt từng worker. Sau đó chỉnh `maxRunners` cho khớp: mỗ
 1. Trong `/root/selfhost-auto-scale/k3s-plan.env`, thêm VMID và IP mới, ví dụ `WORKER_IDS="211 212 213 214"` và `WORKER_IPS="192.168.8.3 192.168.8.4 192.168.8.6 192.168.8.7"`.
 2. Chạy `set -a; source k3s-plan.env; set +a`, rồi `bash pve-discovery.sh`, rồi `DRY_RUN=1 bash pve-create-vms.sh`, rồi `bash pve-create-vms.sh`. VM đã có sẽ được bỏ qua.
 3. Đưa VM mới vào cụm: `bash join-worker.sh 192.168.8.7 <runner-image>`. Script chạy node-prep, ghi `registries.yaml`, cài k3s agent đúng version của server, chờ node Ready, rồi kéo sẵn image. Lấy `<runner-image>` từ `grep -m1 vn-gaqc-runner ~/runner-values.yaml` trên server.
-4. `qm set <id> --cpuunits 50`, rồi tăng `maxRunners` cho khớp sức chứa mới.
+4. `qm set <id> --cpuunits 300` (bằng các worker khác), rồi tăng `maxRunners` cho khớp sức chứa mới.
 
 Mỗi worker 12 vCPU / 20 GiB thêm khoảng 15 slot (request 0,7 CPU/pod). Cập nhật mục 1.3.
 
@@ -889,7 +889,7 @@ Job đang chạy trên worker đó sẽ lỗi; các worker còn lại vẫn nh�
 
 1. `kubectl delete node k3s-worker-N` (trên server).
 2. Xoá VM hỏng: `qm stop <id>; qm destroy <id> --purge`.
-3. Chạy `pve-create-vms.sh` (VM khác đã có sẽ được bỏ qua) → `bash join-worker.sh <ip> <runner-image>`. Script lo node-prep, `registries.yaml`, cài agent (cần `/root/k3s-token`), kéo sẵn image. Sau đó đặt `qm set <id> --cpuunits 50`.
+3. Chạy `pve-create-vms.sh` (VM khác đã có sẽ được bỏ qua) → `bash join-worker.sh <ip> <runner-image>`. Script lo node-prep, `registries.yaml`, cài agent (cần `/root/k3s-token`), kéo sẵn image. Sau đó đặt `qm set <id> --cpuunits 300`.
 4. Nếu có thay đổi vCPU, chạy `resize-worker.sh`. Kiểm tra bằng `kubectl get nodes`.
 
 ### 9.2 Mất `k3s-server-1`

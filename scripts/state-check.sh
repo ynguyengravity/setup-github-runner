@@ -42,6 +42,8 @@ for id in $VMIDS; do
   disk=$(g scsi0 | grep -o 'size=[^,]*'); ip=$(g ipconfig0 | grep -o 'ip=[^,]*')
   printf "%-6s %-22s %-8s %-6s %-7s %-9s %-8s %s %s %s\n" "$id" "$(g name)" "$st" "$(g cores)" "$(g memory)" "$(g cpuunits)" "$(g onboot)" "$disk" "$ip" "$(g template | sed 's/1/(template)/')"
 done
+# cpuunits thực sự đang áp dụng cho VM đang chạy (cgroup v2 cpu.weight)
+echo "cpu.weight: $(for id in $VMIDS; do f=/sys/fs/cgroup/qemu.slice/$id.scope/cpu.weight; [[ -r $f ]] && printf '%s=%s ' "$id" "$(cat "$f")"; done)"
 echo "LXC github-runner-* còn lại: $(pct list 2>/dev/null | awk '$NF ~ /^github-runner-/' | wc -l)"
 
 hdr "k3s"
