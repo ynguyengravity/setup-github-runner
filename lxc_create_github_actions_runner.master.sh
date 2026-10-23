@@ -18,6 +18,10 @@ RUNNER_GROUP="${RUNNER_GROUP:-VN-Team}"
 ORGNAME="${ORGNAME:-Gravity-Global}"
 CURRENT_DATE=$(date +%Y%m%d)
 
+# pct exec (lxc-attach) giữ environment của host: không để token/DRY_RUN của lxc-runner
+# lọt vào container (get.docker.com coi DRY_RUN khác rỗng là chạy thử, không cài gì)
+export -n GITHUB_TOKEN DRY_RUN SLACK_WEBHOOK_URL TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID
+
 log() {
   local text="$1"
   echo -e "\033[33m$text\033[0m"
@@ -267,9 +271,13 @@ pct exec $PCTID -- bash -c "ls -la /dev/net/tun && \
 
 #install docker
 log "-- Installing docker"
+# Tải script ra file trước: 'curl | sh' trả về 0 khi curl lỗi (sh nhận input rỗng)
 pct exec $PCTID -- bash -c "export LANG=en_US.UTF-8 && \
     export LC_ALL=en_US.UTF-8 && \
-    curl -fsSL https://get.docker.com | sh"
+    curl -fsSL https://get.docker.com -o /tmp/get-docker.sh && \
+    env -u DRY_RUN sh /tmp/get-docker.sh && \
+    rm -f /tmp/get-docker.sh && \
+    command -v docker"
 
 # Configure Docker to work properly in LXC
 log "-- Configuring Docker for LXC environment"

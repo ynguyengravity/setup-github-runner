@@ -20,6 +20,9 @@ LXC_RUNNER_LIB="${LXC_RUNNER_LIB:-/usr/lib/lxc-runner}"
 # shellcheck source=common.sh
 source "$LXC_RUNNER_LIB/common.sh"
 load_config
+# Secrets stay shell-local so pct exec (which keeps the host env) never passes them into
+# containers; clone_new hands GITHUB_TOKEN to clone.sh explicitly
+export -n GITHUB_TOKEN SLACK_WEBHOOK_URL TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID
 
 DRY_RUN="${DRY_RUN:-0}"
 for arg in "$@"; do
@@ -134,7 +137,7 @@ clone_new() {
     local logf rc
     NEW_ID=""
     logf=$(mktemp)
-    "$LXC_RUNNER_LIB/clone.sh" < /dev/null 2>&1 | tee "$logf" >&2
+    GITHUB_TOKEN="$GITHUB_TOKEN" "$LXC_RUNNER_LIB/clone.sh" < /dev/null 2>&1 | tee "$logf" >&2
     rc=${PIPESTATUS[0]}
     NEW_ID=$(sed -n 's/^NEW_PCTID=\([0-9]*\)$/\1/p' "$logf" | tail -n1)
     rm -f "$logf"

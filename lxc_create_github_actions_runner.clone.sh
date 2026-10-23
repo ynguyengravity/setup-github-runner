@@ -30,6 +30,10 @@ if [ -z "$GITHUB_TOKEN" ]; then
     fi
 fi
 
+# pct exec (lxc-attach) giữ environment của host: không để token (admin:org) và biến của
+# lxc-runner lọt vào lệnh chạy trong container. Giá trị vẫn dùng được trong script này.
+export -n GITHUB_TOKEN DRY_RUN SLACK_WEBHOOK_URL TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID
+
 # Set organization URLs
 RUNNER_URL="https://github.com/${ORGNAME}"
 API_URL="https://api.github.com/orgs/${ORGNAME}/actions/runners/registration-token"
