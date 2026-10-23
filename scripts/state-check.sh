@@ -55,8 +55,11 @@ srv 'helm get values vn-gaqc-docker -n arc-runners -o yaml' | grep -E '^(runnerS
 srv 'kubectl get autoscalingrunnerset -n arc-runners'
 srv 'kubectl get pods -n arc-systems -o custom-columns=NAME:.metadata.name,STATUS:.status.phase,NODE:.spec.nodeName'
 echo "Runner pod đang chạy: $(srv 'kubectl get pods -n arc-runners --no-headers 2>/dev/null | wc -l')"
-srv "kubectl get secret,configmap -n arc-runners -o custom-columns=KIND:.kind,NAME:.metadata.name,KEYS:.data --no-headers" \
-  | awk '{ k=$3; gsub(/map\[|\]/, "", k); n=split(k, a, " "); keys=""; for (i=1; i<=n; i++) { split(a[i], b, ":"); keys=keys b[1] " " } print $1, $2, keys }'
+# Chỉ in TÊN khoá (go-template duyệt key của .data), không bao giờ in giá trị.
+# Secret do Helm (sh.helm.release.*) và ARC (runner jitToken) tự sinh thì chỉ đếm.
+srv "kubectl get secret,configmap -n arc-runners -o go-template='{{range .items}}{{.kind}} {{.metadata.name}}{{range \$k, \$v := .data}} {{\$k}}{{end}}{{\"\\n\"}}{{end}}'" \
+  | awk '$2 ~ /^sh\.helm\.release\./ { h++; next } $2 ~ /-runner-/ && $3 == "jitToken" { j++; next } $2 == "kube-root-ca.crt" { next } { print }
+         END { print "(Secret Helm release: " h+0 ", Secret jitToken của runner: " j+0 ")" }'
 
 hdr "Registry trên mirror"
 ssh -o BatchMode=yes -o ConnectTimeout=5 "$MIRROR" 'cd /opt/mirror && sudo docker compose ps --format "{{.Service}} {{.State}} {{.Ports}}"; echo "cache :5000 -> $(curl -s localhost:5000/v2/_catalog)"; echo "local :5001 -> $(curl -s localhost:5001/v2/_catalog)"; for r in $(curl -s localhost:5001/v2/_catalog | grep -o "\"[^\"]*\"" | tr -d "\"" | grep -v repositories); do echo "  $r tags: $(curl -s localhost:5001/v2/$r/tags/list)"; done; df -h / | tail -1' 2>&1
