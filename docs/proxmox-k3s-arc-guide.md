@@ -71,6 +71,7 @@ flowchart TB
 | 201 | `k3s-server-1` | `192.168.8.2` | 2 / 4 GiB / 30 GB | k3s server (embedded etcd), có taint `CriticalAddonsOnly`; chạy ARC controller và listener |
 | 211 | `k3s-worker-1` | `192.168.8.3` | 10 / 16 GiB / 100 GB | k3s agent, label `gha-runner=true`, chạy runner pod. Nâng từ 8 lên 10 vCPU ngày 2026-10-22 (phương án A) |
 | 212 | `k3s-worker-2` | `192.168.8.4` | 10 / 16 GiB / 100 GB | Như worker-1 |
+| 213 | `k3s-worker-3` | `192.168.8.6` | 12 / 20 GiB / 150 GB | **Kế hoạch B (chưa tạo):** worker thứ 3. Cùng lúc nâng 211/212 lên 12 / 20 / 150 và đặt `cpuunits 50` cho cả 3 worker |
 | 220 | `registry-mirror` | `192.168.8.5` | 2 / 4 GiB / 50 GB | Docker + `registry:3`, cache Docker Hub |
 
 Chung cho mọi VM: `--balloon 0`, `--cpu host`, `virtio-scsi-single` + `iothread`, full clone trên `local-lvm2`, `--onboot 1`, `--startup order` (server = 1, còn lại = 2), gateway `192.168.8.1`, DNS `10.128.6.2 8.8.8.8`, user `ubuntu`. Mật khẩu console nằm trong password manager. Worker 10 vCPU có allocatable khoảng 9 CPU và 13,1 GiB RAM. Mỗi pod request 1 CPU, nên mỗi worker chứa được 9 runner.
@@ -175,6 +176,27 @@ Muốn chạy nhiều hơn thì có các hướng (mục 2, TODO):
 
 RAM (còn trống khoảng 185 GiB) và disk (`local-lvm2` còn khoảng 2392 GB sau khi xoá LXC) đều không phải giới hạn.
 
+Ảnh chụp Node → Summary ngày 2026-10-23:
+- CPU 53% / 32, load average 16 / 14 / 14 (tức khoảng 15 thread rảnh lúc đó).
+- RAM 194 / 376 GiB, IO delay 0,01%.
+- SWAP 81% (6,5 / 8 GiB): phần còn sót lại từ thời các LXC 32 GiB. Dọn lúc host rảnh bằng `swapoff -a && swapon -a`; RAM đang dư nên lệnh này an toàn.
+
+**Phương án B cho 40 runner** (chốt ngày 2026-10-23):
+
+| | Giá trị |
+| --- | --- |
+| Worker | 3 × 12 vCPU / 20 GiB / 150 GB (211, 212, 213 tại `.6`) |
+| Request mỗi pod | 0,7 CPU (dind 500m + runner 200m), 1 GiB RAM, 6 GB ephemeral |
+| Sức chứa mỗi worker | CPU 11 / 0,7 = 15 · RAM khoảng 17,5 / 1 = 17 · disk khoảng 120 / 6 = 20 → **15 pod** |
+| Tổng | 3 worker = **45 slot**, đặt `maxRunners: 40` |
+| `cpuunits` của worker | 50: cụm dùng CPU rảnh của host, nhưng khi host bận thì nhường cho các VM khác |
+
+Cách đánh giá hiệu năng:
+- 40 job nhẹ chạy cùng lúc thì ổn.
+- 40 job browser cùng lúc thì mỗi job chậm khoảng 2,5–3 lần, nhưng tổng số job làm xong mỗi giờ không đổi.
+- Hai workflow jenkins tự giới hạn `max-parallel: 10` cho mỗi run, nên chỉ dùng tới 40 runner khi nhiều run hoặc nhiều repo chạy cùng lúc.
+- Nếu job browser bắt đầu bị timeout, giảm `maxRunners` về 24–30. Chỉ cần `helm upgrade`, không phải reboot worker.
+
 ### 1.10 Repo và workflow đang dùng runner
 
 Mọi workflow dùng `runs-on: vn-gaqc-docker`, nên không phải sửa gì khi đổi hạ tầng. Dưới đây là các workflow đã chạy thật trên cụm và những điểm cần biết khi chúng lỗi.
@@ -226,7 +248,9 @@ Xem lịch sử Helm: `helm history vn-gaqc-docker -n arc-runners` và `helm his
 - [x] Đã xoá LXC cũ 100–135 (2026-10-22).
 - [ ] Xoá các runner `github-runner-*` còn Offline trên GitHub (Org → Settings → Actions → Runners).
 - [x] Phương án A (2026-10-22): 211 và 212 lên 10 vCPU (allocatable 9 CPU), `maxRunners: 18`, request 1 CPU/pod (Helm revision 5).
-- [ ] Theo dõi CPU host khi chạy đủ 18 job. Nếu host thường xuyên trên 90%, giảm `maxRunners` xuống 14–16.
+- [ ] Phương án B (mục 1.9): `resize-worker.sh` cho 211/212 (12 / 20 / 150) → `pve-create-vms.sh` tạo 213 → `join-worker.sh 192.168.8.6 <runner-image>` → `qm set <id> --cpuunits 50` cho 211/212/213 → `helm upgrade` với `maxRunners: 40`, request 0,7 CPU/pod.
+- [ ] Sau khi chạy B: theo dõi CPU host và thời gian job browser. Nếu job bị timeout, giảm `maxRunners` về 24–30.
+- [ ] (Tuỳ chọn) Dọn swap của host lúc rảnh: `swapoff -a && swapon -a`.
 - [ ] Nếu cần nhiều hơn khoảng 18 job browser chạy cùng lúc: chọn giữa thêm host, dời `Maintain-Local`, `runOnExternal`, hoặc chạy headless (mục 1.9).
 - [ ] Báo người quản lý App `gravityactionvn` rằng ARC đang dùng key có fingerprint ở mục 1.5.
 - [ ] Cân nhắc tạo App riêng chỉ có quyền `Self-hosted runners` để giảm rủi ro ([github-app.md](github-app.md)).
@@ -375,11 +399,10 @@ Làm lần lượt từng worker. Sau đó chỉnh `maxRunners` cho khớp (mỗ
 
 1. Trong `/root/selfhost-auto-scale/k3s-plan.env`, đổi `WORKER_IDS="211 212 213"` và `WORKER_IPS="192.168.8.3 192.168.8.4 192.168.8.6"`.
 2. Chạy `set -a; source k3s-plan.env; set +a`, rồi `bash pve-discovery.sh`, rồi `DRY_RUN=1 bash pve-create-vms.sh`, rồi `bash pve-create-vms.sh`. VM đã có sẽ được bỏ qua.
-3. Chạy `node-prep.sh` trên `192.168.8.6` (mục 6.5).
-4. Ghi `registries.yaml` (mục 6.7) và cài agent (mục 6.6, phần worker), chỉ với IP mới.
-5. Kiểm tra bằng `kubectl get nodes`.
+3. Đưa VM mới vào cụm: `bash join-worker.sh 192.168.8.6 <runner-image>`. Script chạy node-prep, ghi `registries.yaml`, cài k3s agent đúng version của server, chờ node Ready, rồi kéo sẵn image. Lấy `<runner-image>` từ `grep -m1 vn-gaqc-runner ~/runner-values.yaml` trên server.
+4. `qm set <id> --cpuunits 50`, rồi tăng `maxRunners` cho khớp sức chứa mới.
 
-Mỗi worker 8 vCPU / 16 GiB thêm khoảng 10–12 slot. Cập nhật mục 1.3.
+Mỗi worker 12 vCPU / 20 GiB thêm khoảng 15 slot (request 0,7 CPU/pod). Cập nhật mục 1.3.
 
 ---
 
@@ -393,6 +416,7 @@ Mỗi worker 8 vCPU / 16 GiB thêm khoảng 10–12 slot. Cập nhật mục 1.3
 | IP tĩnh `192.168.8.2`–`.5` | `dhcpd` của host cấp `.10`–`.11.254`. Kế hoạch đầu tiên dùng `.201/.211/.212/.220` nằm trong dải DHCP nên đã đổi | IP trong dải DHCP |
 | Storage `local-lvm2` (thick) | `local-lvm` (thin) chỉ còn khoảng 40 GB | |
 | 2 worker 8 vCPU / 16 GiB, `maxRunners: 8` (lúc đầu) | CPU host đã bận 73–89%, RAM cấp phát đã gấp 3,6 lần RAM vật lý | 4 worker 16 vCPU / 32 GiB, 100 runner |
+| Phương án B: 3 worker × 12 vCPU, request 0,7 CPU/pod, `maxRunners: 40`, `cpuunits 50` | Cho nhiều run hoặc repo chạy cùng lúc mà không phải chờ; RAM và disk dư nhiều; 3 worker giúp hỏng một worker chỉ mất khoảng 1/3 job; `cpuunits` bảo vệ các VM khác | 2 worker × 16 vCPU (hỏng một worker mất khoảng 20 job); 4 worker × 10 vCPU (tốn thêm IP và phần reserved) |
 | Phương án A: worker 10 vCPU, request 1 CPU/pod, `maxRunners: 18` | Job browser dùng khoảng 1,2 thread; cụm chỉ có khoảng 18 thread thật (mục 1.9). Request sát thực tế giúp scheduler không nhồi quá tải, job dư xếp hàng | `maxRunners` 70–100 với request 0,5 CPU: job chậm gấp 4–5 lần, dễ timeout, tổng thời gian chạy không giảm |
 | Scale set tên `vn-gaqc-docker` ngay từ đầu, dừng LXC trước khi cài | Workflow không phải sửa; không có lúc nào cả LXC lẫn scale set cùng nhận job | Chạy thử với tên tạm |
 | GitHub App có sẵn `gravityactionvn` + key riêng cho ARC | Có sẵn quyền `Self-hosted runners`; không hết hạn; thêm key không ảnh hưởng hệ thống khác | PAT (gắn với người, có hạn dùng); tạo App mới (có thể làm sau) |
@@ -793,7 +817,7 @@ Job đang chạy trên worker đó sẽ lỗi; các worker còn lại vẫn nh�
 
 1. `kubectl delete node k3s-worker-N` (trên server).
 2. Xoá VM hỏng: `qm stop <id>; qm destroy <id> --purge`.
-3. Chạy `pve-create-vms.sh` (VM khác đã có sẽ được bỏ qua) → `node-prep.sh` → ghi `registries.yaml` → cài agent (mục 6.6, phần worker, cần `/root/k3s-token`) → kéo sẵn image `vn-gaqc-runner` và `docker:dind`.
+3. Chạy `pve-create-vms.sh` (VM khác đã có sẽ được bỏ qua) → `bash join-worker.sh <ip> <runner-image>`. Script lo node-prep, `registries.yaml`, cài agent (cần `/root/k3s-token`), kéo sẵn image. Sau đó đặt `qm set <id> --cpuunits 50`.
 4. Nếu có thay đổi vCPU, chạy `resize-worker.sh`. Kiểm tra bằng `kubectl get nodes`.
 
 ### 9.2 Mất `k3s-server-1`

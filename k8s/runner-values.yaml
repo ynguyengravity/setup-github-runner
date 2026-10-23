@@ -13,7 +13,8 @@ runnerScaleSetName: "vn-gaqc-docker"   # = runs-on của workflow
 runnerGroup: "VN-Team"                 # group của runner LXC cũ
 
 minRunners: 0
-maxRunners: 18                         # = 2 worker × 9 CPU allocatable / 1 CPU mỗi pod (giới hạn thật là CPU host)
+maxRunners: 40                         # phương án B: 3 worker × 12 vCPU (11 allocatable) / 0,7 CPU mỗi pod ≈ 45 slot.
+                                       # CPU thật của host vẫn chỉ ~15–18 thread: 40 job browser cùng lúc sẽ chậm ~2,5–3×
 
 controllerServiceAccount:
   namespace: arc-systems
@@ -76,10 +77,11 @@ template:
             command: ["docker", "info"]
           failureThreshold: 24
           periodSeconds: 5
-        # Job browser (Chrome + Xvfb trong docker compose) chạy trong dind, đo được ~1,2 CPU/job:
-        # request 750m (+250m của runner = 1 CPU/pod) để scheduler không nhồi quá CPU thật
+        # Job browser (Chrome + Xvfb trong docker compose) chạy trong dind, đo được ~1,2 CPU/job.
+        # Request 500m (+200m của runner = 0,7 CPU/pod) để xếp được ~40 pod; worker có cpuunits 50
+        # trên Proxmox nên khi host bận, các VM khác vẫn được ưu tiên CPU
         resources:
-          requests: { cpu: 750m, memory: 512Mi, ephemeral-storage: 4Gi }
+          requests: { cpu: 500m, memory: 512Mi, ephemeral-storage: 4Gi }
           limits: { memory: 2Gi }
         volumeMounts:
           - name: work
@@ -108,7 +110,7 @@ template:
           - name: RUNNER_WAIT_FOR_DOCKER_IN_SECONDS
             value: "120"
         resources:
-          requests: { cpu: 250m, memory: 512Mi, ephemeral-storage: 2Gi }
+          requests: { cpu: 200m, memory: 512Mi, ephemeral-storage: 2Gi }
           limits: { memory: 2Gi }
         volumeMounts:
           - name: work
