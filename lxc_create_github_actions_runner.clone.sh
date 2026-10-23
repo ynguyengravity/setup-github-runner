@@ -9,6 +9,10 @@ GITHUB_RUNNER_URL="${GITHUB_RUNNER_URL:-https://github.com/actions/runner/releas
 RUNNER_LABELS="${RUNNER_LABELS:-vn-gaqc-docker,test-setup}"
 RUNNER_GROUP="${RUNNER_GROUP:-VN-Team}"
 ORGNAME="${ORGNAME:-Gravity-Global}"
+# Optional resource overrides for the clone (empty = inherit from template)
+PCT_CORES="${PCT_CORES:-}"
+PCT_MEMORY="${PCT_MEMORY:-}"   # MiB
+PCT_SWAP="${PCT_SWAP:-}"       # MiB
 CURRENT_DATE=$(date +%Y%m%d)
 
 # Get GitHub token
@@ -17,7 +21,7 @@ CURRENT_DATE=$(date +%Y%m%d)
 if [ -z "$GITHUB_TOKEN" ]; then
     if [ -t 0 ]; then
         # Có terminal → hỏi người dùng
-        read -rp "Enter github token: " GITHUB_TOKEN
+        read -rsp "Enter github token: " GITHUB_TOKEN
         echo
     else
         # Không có terminal (service/cron) → exit ngay, không treo
@@ -74,8 +78,10 @@ GITHUB_RUNNER_FILE=$(basename $GITHUB_RUNNER_URL)   # dùng làm tên file bên 
 
 log "-- Cloning container ${SOURCE_CONTAINER_ID} to new container ID: ${NEW_PCTID}"
 
-# Stop source container if running
+# Stop source container if running (remember its state to restore it later)
+SOURCE_WAS_RUNNING=false
 if pct status $SOURCE_CONTAINER_ID | grep -q "running"; then
+    SOURCE_WAS_RUNNING=true
     log "-- Stopping source container ${SOURCE_CONTAINER_ID}"
     pct stop $SOURCE_CONTAINER_ID
 fi
@@ -99,20 +105,35 @@ sanitize_container_config $NEW_PCTID
 # Update hostname in container
 pct set $NEW_PCTID --hostname github-runner-${NEW_PCTID}-${CURRENT_DATE}
 
+# Apply resource overrides if provided
+[ -n "$PCT_CORES" ] && pct set $NEW_PCTID --cores $PCT_CORES
+[ -n "$PCT_MEMORY" ] && pct set $NEW_PCTID --memory $PCT_MEMORY
+[ -n "$PCT_SWAP" ] && pct set $NEW_PCTID --swap $PCT_SWAP
+
 # Start the new container
 log "-- Starting new container ${NEW_PCTID}"
 pct start $NEW_PCTID
-sleep 10
 
-# Wait for container to be fully ready
-log "-- Waiting for container to be ready..."
-sleep 15
+# Wait for network/DNS (DHCP) instead of a fixed sleep
+log "-- Waiting for container network"
+for i in $(seq 1 30); do
+    if pct exec $NEW_PCTID -- getent hosts api.github.com > /dev/null 2>&1; then
+        break
+    fi
+    if [ "$i" -eq 30 ]; then
+        log "ERROR: Container $NEW_PCTID has no network after 60s"
+        exit 1
+    fi
+    sleep 2
+done
 
-# Reset machine ID to avoid conflicts
+# Reset machine ID to avoid conflicts; lock root password (templates built
+# by older master.sh had an empty root password)
 log "-- Resetting machine ID"
 pct exec $NEW_PCTID -- bash -c "rm -f /etc/machine-id /var/lib/dbus/machine-id && \
     systemd-machine-id-setup && \
-    dbus-uuidgen --ensure"
+    dbus-uuidgen --ensure && \
+    passwd -l root"
 
 # Get runner installation token
 log "-- Getting runner installation token"
@@ -124,12 +145,11 @@ RES=$(curl -q -L \
   -H "X-GitHub-Api-Version: 2022-11-28" \
   $API_URL)
 
-# Display response for debugging
-echo "API Response: $RES"
-
 RUNNER_TOKEN=$(echo $RES | grep -o '"token": "[^"]*' | grep -o '[^"]*$')
 
 if [ -z "$RUNNER_TOKEN" ]; then
+    # No token in the response, so it is safe to print for debugging
+    echo "API Response: $RES"
     log "ERROR: Failed to get runner token. Please check your token and organization name."
     log "Make sure your token has admin:org permission for organization runners."
     exit 1
@@ -194,8 +214,8 @@ pct exec $NEW_PCTID -- bash -c "systemctl restart actions.runner.${ORGNAME}.gith
 log "-- Enabling auto-start for container $NEW_PCTID"
 pct set $NEW_PCTID --onboot 1
 
-# Restart source container if it was running
-if pct status $SOURCE_CONTAINER_ID | grep -q "stopped"; then
+# Restart source container only if it was running before the clone
+if [ "$SOURCE_WAS_RUNNING" = true ] && pct status $SOURCE_CONTAINER_ID | grep -q "stopped"; then
     log "-- Restarting source container ${SOURCE_CONTAINER_ID}"
     pct start $SOURCE_CONTAINER_ID
 fi
@@ -206,4 +226,6 @@ log "-- Runner name: github-runner-${NEW_PCTID}-${CURRENT_DATE}"
 log "-- Runner labels: ${RUNNER_LABELS}"
 log "-- Runner group: ${RUNNER_GROUP}"
 log "-- Auto-start enabled: Container will start automatically when Proxmox boots"
-log "-- Source container ${SOURCE_CONTAINER_ID} has been restarted"
+if [ "$SOURCE_WAS_RUNNING" = true ]; then
+    log "-- Source container ${SOURCE_CONTAINER_ID} has been restarted"
+fi

@@ -5,6 +5,10 @@ set -e
 GITHUB_RUNNER_URL="https://github.com/actions/runner/releases/download/v2.338.0/actions-runner-linux-x64-2.338.0.tar.gz"
 TEMPL_URL="http://download.proxmox.com/images/system/ubuntu-24.04-standard_24.04-2_amd64.tar.zst"
 PCTSIZE="50G"
+# Container resources (override via env). Host RAM is heavily overcommitted, keep these modest.
+PCT_CORES="${PCT_CORES:-4}"
+PCT_MEMORY="${PCT_MEMORY:-16384}"   # MiB
+PCT_SWAP="${PCT_SWAP:-4096}"        # MiB
 RUNNER_LABELS="vn-gaqc-docker,test-setup"
 # RUNNER_LABELS="test-playwright"
 RUNNER_GROUP="VN-Team"
@@ -20,6 +24,7 @@ log "-- Using Ubuntu 24.04 LTS (Noble Numbat) template - supported until 2029"
 log "-- Setting up runner for Organization: ${ORGNAME}"
 log "-- Using runner labels: ${RUNNER_LABELS}"
 log "-- Using runner group: ${RUNNER_GROUP}"
+log "-- Resources: ${PCT_CORES} cores, ${PCT_MEMORY} MiB RAM, ${PCT_SWAP} MiB swap"
 log "-- Date: ${CURRENT_DATE}"
 
 # Không cần hỏi IP và Gateway khi sử dụng DHCP
@@ -59,9 +64,9 @@ pct create $PCTID $TEMPL_FILE \
     -arch amd64 \
     -ostype ubuntu \
     -hostname github-runner-${PCTID}-${CURRENT_DATE} \
-    -cores 5 \
-    -memory 32768 \
-    -swap 32768 \
+    -cores $PCT_CORES \
+    -memory $PCT_MEMORY \
+    -swap $PCT_SWAP \
     -storage local-lvm2 \
     -features nesting=1,keyctl=1 \
     -unprivileged 0 \
@@ -118,7 +123,8 @@ pct exec $PCTID -- bash -c "export DEBIAN_FRONTEND=noninteractive && \
     export LC_ALL=en_US.UTF-8 && \
     apt update -y && \
     apt install -y git curl software-properties-common apt-transport-https ca-certificates gnupg lsb-release && \
-    passwd -d root"
+    passwd -l root"
+# Root password is locked (privileged container): use 'pct enter <id>' from the Proxmox host for shell access
 
 # Install browsers (Edge, Chrome, Firefox) - LXC compatible approach
 log "-- Installing browsers (Edge, Chrome, Firefox) - LXC compatible approach"
