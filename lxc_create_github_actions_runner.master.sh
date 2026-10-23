@@ -4,9 +4,9 @@ set -e
 
 GITHUB_RUNNER_URL="https://github.com/actions/runner/releases/download/v2.338.0/actions-runner-linux-x64-2.338.0.tar.gz"
 TEMPL_URL="http://download.proxmox.com/images/system/ubuntu-24.04-standard_24.04-2_amd64.tar.zst"
-PCTSIZE="50G"
+PCTSIZE="25G"
 # Container resources (override via env). Host RAM is heavily overcommitted, keep these modest.
-PCT_CORES="${PCT_CORES:-4}"
+PCT_CORES="${PCT_CORES:-3}"
 PCT_MEMORY="${PCT_MEMORY:-16384}"   # MiB
 PCT_SWAP="${PCT_SWAP:-4096}"        # MiB
 RUNNER_LABELS="vn-gaqc-docker,test-setup"
