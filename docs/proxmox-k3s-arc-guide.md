@@ -47,7 +47,7 @@ Tài liệu và file liên quan:
 ### 1.1 Tóm tắt
 
 - **Trạng thái:** đang chạy production cho `runs-on: vn-gaqc-docker` từ 2026-10-22 khoảng 15:00 UTC. Đã chạy thật job `SonarQube-Scan` của repo `gg-ai-command-center-app`.
-- **Quy mô:** `minRunners: 0`, `maxRunners: 40` (phương án B, 2026-10-23), 3 worker, mỗi pod request 0,7 CPU. Mỗi job chạy trong một pod riêng, xong job thì pod bị xoá. Giới hạn thật là CPU của host, khoảng 15–18 thread cho cụm (mục 1.9).
+- **Quy mô:** `minRunners: 0`, `maxRunners: 40`, 4 worker (từ 2026-10-23, phương án C đang triển khai; trước đó 3 worker theo phương án B), `cpuunits 300`, mỗi pod request 0,7 CPU. Mỗi job chạy trong một pod riêng, xong job thì pod bị xoá. Giới hạn thật là CPU của host, khoảng 15–18 thread cho cụm (mục 1.9).
 - **Tương thích với LXC cũ:**
     - 2026-10-22: job chạy bằng root, `sudo` dùng được, có `docker compose`. Các job screenshot, check-console và SonarQube đều chạy được.
     - Lúc đó image chuẩn chưa có browser, nên bước "Install browsers" mất khoảng 6 phút mỗi job.
@@ -64,13 +64,14 @@ flowchart TB
             W1["k3s-worker-1 · 192.168.8.3 · VMID 211<br/>runner pod (runner + dind)"]
             W2["k3s-worker-2 · 192.168.8.4 · VMID 212<br/>runner pod (runner + dind)"]
             W3["k3s-worker-3 · 192.168.8.6 · VMID 213<br/>runner pod (runner + dind)"]
+            W4["k3s-worker-4 · 192.168.8.7 · VMID 214<br/>runner pod (runner + dind)"]
         end
         MIR["registry-mirror · 192.168.8.5 · VMID 220<br/>:5000 cache Docker Hub · :5001 image vn-gaqc-runner"]
     end
     SRV -- "long-poll HTTPS (GitHub App gravityactionvn)" --> GH
-    SRV -- "tạo / xoá pod" --> W1 & W2 & W3
-    W1 & W2 & W3 -- "chạy job, báo kết quả" --> GH
-    W1 & W2 & W3 -- "kéo image, docker pull" --> MIR
+    SRV -- "tạo / xoá pod" --> W1 & W2 & W3 & W4
+    W1 & W2 & W3 & W4 -- "chạy job, báo kết quả" --> GH
+    W1 & W2 & W3 & W4 -- "kéo image, docker pull" --> MIR
     MIR -- "lần đầu" --> DH
 ```
 
@@ -104,9 +105,10 @@ flowchart TB
 | 211 | `k3s-worker-1` | `192.168.8.3` | 12 / 20 GiB / 150 GB | k3s agent, label `gha-runner=true`, chạy runner pod, `cpuunits 300` (từ 23/10; trước đó 50). Lịch sử: 8 → 10 vCPU (phương án A, 22/10) → 12 / 20 / 150 (phương án B, 23/10) |
 | 212 | `k3s-worker-2` | `192.168.8.4` | 12 / 20 GiB / 150 GB | Như worker-1 |
 | 213 | `k3s-worker-3` | `192.168.8.6` | 12 / 20 GiB / 150 GB | Như worker-1. Tạo ngày 2026-10-23 bằng `pve-create-vms.sh` + `join-worker.sh` |
+| 214 | `k3s-worker-4` | `192.168.8.7` | 12 / 32 GiB / 150 GB | Như worker-1. Tạo ngày 2026-10-23 (phương án C) bằng `pve-create-vms.sh` + `join-worker.sh`, `cpuunits 300` |
 | 220 | `registry-mirror` | `192.168.8.5` | 2 / 4 GiB / 50 GB | Docker + `registry:3`, cache Docker Hub |
 
-✅ Cấu hình VM trong bảng này đã xác minh ngày 2026-10-23 bằng `state-check.sh` (`qm config --current`): cores, RAM, disk, IP, `onboot 1`, `cpuunits 50` trên 211/212/213 (server và mirror giữ mặc định). Sau đó, cùng ngày, `cpuunits` của 211/212/213 được đổi thành 300 ✅ Đã xác minh ngày 2026-10-23: `qm pending` không có thay đổi chờ áp dụng, và `/sys/fs/cgroup/qemu.slice/<id>.scope/cpu.weight` = 300 trên cả 3 VM (áp dụng ngay khi VM đang chạy, không cần reboot). Node k3s: 3 worker có allocatable CPU 11 và RAM khoảng 17 GiB, server có CPU 1 và RAM khoảng 1,8 GiB, tất cả đều `Ready` và chạy `v1.36.5+k3s1`.
+✅ Cấu hình VM trong bảng này đã xác minh ngày 2026-10-23 bằng `state-check.sh` (`qm config --current`): cores, RAM, disk, IP, `onboot 1`, `cpuunits 50` trên 211/212/213 (server và mirror giữ mặc định). Sau đó, cùng ngày, `cpuunits` của 211/212/213 được đổi thành 300 ✅ Đã xác minh ngày 2026-10-23: `qm pending` không có thay đổi chờ áp dụng, và `/sys/fs/cgroup/qemu.slice/<id>.scope/cpu.weight` = 300 trên cả 3 VM (áp dụng ngay khi VM đang chạy, không cần reboot). VM 214: ✅ ngày 2026-10-23, `join-worker.sh` báo `k3s-worker-4 đã vào cụm`, `kubectl get nodes` cho thấy 5 node `Ready` cùng `v1.36.5+k3s1` (`k3s-worker-4` IP `192.168.8.7`), và `cpu.weight` = 300 trên 211/212/213/214. ⚠️ Allocatable CPU/RAM của 214, và cấu hình 214 qua `state-check.sh`, chưa ghi lại. Node k3s: 3 worker có allocatable CPU 11 và RAM khoảng 17 GiB, server có CPU 1 và RAM khoảng 1,8 GiB, tất cả đều `Ready` và chạy `v1.36.5+k3s1`.
 
 Chung cho mọi VM: `--balloon 0`, `--cpu host`, `virtio-scsi-single` + `iothread`, full clone trên `local-lvm2`, `--onboot 1`, `--startup order` (server = 1, còn lại = 2), gateway `192.168.8.1`, DNS `10.128.6.2 8.8.8.8`, user `ubuntu`. Mật khẩu console nằm trong password manager. Trên giao diện Proxmox, "Memory usage" của worker luôn hiện khoảng 100%: với `--balloon 0`, Proxmox chỉ thấy RAM mà VM đã chiếm trên host, kể cả page cache. Muốn biết RAM job dùng thật thì xem `kubectl top nodes`. Worker 12 vCPU / 20 GiB có allocatable 11 CPU và khoảng 17 GiB RAM (`17869236Ki`). Mỗi pod request 0,7 CPU, nên mỗi worker chứa được 15 runner, 3 worker là 45 slot.
 
@@ -229,6 +231,7 @@ RAM (còn trống khoảng 185 GiB) và disk (`local-lvm2` còn khoảng 2392 GB
 | LXC cũ (5 run, mỗi run 45–78 job, `max-parallel: 10`) | 3,0–5,1 phút | **0,3 phút** | **1,9–3,8 phút** |
 | ARC, run `39877200718` (image `vn-gaqc-runner`, cụm đầy 40 runner, `cpuunits 50`) | 16,6 phút | **4,2 phút** | **8,7 phút** |
 | Runner của GitHub (`runOnExternal`), run `39790152263` | 4,1 phút | 0,8 phút | 2,4 phút |
+| ARC, run `39888711853` (Helm revision 8, image `…-202610230904`, 4 worker, `cpuunits 300`, cụm đầy 40 runner; chỉ 1 job `process-chunks (1)`) | 8,9 phút | **3,0 phút** | **2,7 phút** |
 
 Nguyên nhân:
 
@@ -236,6 +239,8 @@ Nguyên nhân:
     - LXC cũ là runner cố định, nên chỉ cài một lần.
     - Pod ARC bị xoá sau mỗi job, nên job nào cũng tải lại.
     - Cách sửa: đưa các gói này vào image (bản build sau ngày 23/10) và giữ lại apt lists.
+    - ⚠️ Tag `2.338.1-202610230904` **không có** lớp font: log job `120203193853` (run `39888711853`, 2026-10-23 02:22 UTC) vẫn cài mới 31 gói font (214 MB) và `libu2f-udev`. Dockerfile trên `v2` (commit `f605687`) đã có lớp này và bước kiểm tra `fc-list :lang=ja` trong Dockerfile sẽ làm build lỗi nếu thiếu font, nên nhiều khả năng `build.sh` đã chạy với Dockerfile cũ trong `/root/selfhost-auto-scale/runner-image/` (chưa tải lại từ repo). Cần tải lại Dockerfile và build lại.
+    - ✅ Với `cpuunits 300` và 4 worker, Process chunk ở cụm đầy 40 runner còn 2,7 phút (trước là 8,7 phút), nằm trong khoảng của LXC cũ (1,9–3,8 phút). Mới đo 1 job, cần đo thêm.
 2. **Process chunk:** do thiếu CPU.
     - Mỗi LXC cũ có 5 core, với mức ưu tiên ngang các VM khác.
     - Phần lớn run screenshot trước đây lại chạy trên runner của GitHub: trong 40 run gần nhất trước 15:00 ngày 22/10, chỉ khoảng 1/5 chạy trên LXC.
@@ -314,6 +319,8 @@ Mỗi pod có 2 container chính: `runner` (chạy các step của job) và `din
 | 2026-10-22 17:53:06 UTC | Helm revision 6: đổi scale set sang image `vn-gaqc-runner` (⚠️ suy ra từ thời điểm và kết quả `helm get values`) |
 | 2026-10-23 00:14:29 UTC | Phương án B, Helm revision 7: `resize-worker.sh` nâng 211/212 lên 12 vCPU / 20 GiB / 150 GB; tạo 213 (`k3s-worker-3`, `.6`) bằng `pve-create-vms.sh` + `join-worker.sh`; `cpuunits 50` cho 3 worker; request 0,7 CPU/pod; `maxRunners: 40`. ✅ Đã xác minh bằng output `kubectl get nodes` (3 worker allocatable 11 CPU, khoảng 17 GiB) và `autoscalingrunnerset` (MAX 40) |
 | 2026-10-23 00:22 UTC | Thêm `scripts/state-check.sh` và mục 0 (quy tắc nguồn sự thật); `build.sh` tự lấy danh sách worker từ cụm. Lần chạy `state-check.sh` đầu tiên xác minh mục 1.2–1.4 và 1.9 |
+| 2026-10-23, khoảng 02:04 UTC | Phương án C (giữ 40 runner): `cpuunits 300` cho 211/212/213 (✅ `cpu.weight` = 300); build image `vn-gaqc-runner:2.338.1-202610230904` có sẵn font và thư viện (tag theo giờ local UTC+7), đã kéo sẵn về 211–213 |
+| 2026-10-23, sau 02:04 UTC | Tạo VM 214 (`k3s-worker-4`, `.7`, 12 vCPU / 32 GiB / 150 GB) bằng `pve-create-vms.sh` + `join-worker.sh` (kéo sẵn image mới); `cpuunits 300`. ✅ 5 node `Ready`. Chưa `helm upgrade` (vẫn Helm revision 7) |
 
 Xem lịch sử Helm: `helm history vn-gaqc-docker -n arc-runners` và `helm history arc -n arc-systems`.
 
@@ -332,8 +339,8 @@ Xem lịch sử Helm: `helm history vn-gaqc-docker -n arc-runners` và `helm his
 - [ ] Phương án C (mục 1.9):
     1. ✅ Build lại image (có font và thư viện): `192.168.8.5:5001/vn-gaqc-runner:2.338.1-202610230904` (2026-10-23), đã kéo sẵn về 211/212/213.
     2. `resize-worker.sh` 211/212/213 lên RAM 32 GiB.
-    3. Tạo 214 (`.7`) và `join-worker.sh`.
-    4. ✅ `qm set 211/212/213 --cpuunits 300` (2026-10-23). Còn lại: `qm set 214 --cpuunits 300` sau khi tạo VM 214.
+    3. ✅ Tạo 214 (`.7`) và `join-worker.sh` (2026-10-23).
+    4. ✅ `qm set 211/212/213/214 --cpuunits 300` (2026-10-23, `cpu.weight` = 300 trên cả 4).
     5. `helm upgrade` với tag mới, limit RAM 4 GiB, `maxRunners: 40`.
     6. Đo lại một run screenshot. Mục tiêu: Install browsers dưới 1 phút, Process chunk khoảng 3–4 phút. Khi cụm đầy, chạy `vmstat 5 3` trên worker và xem cột `st` (CPU steal) để biết job còn chờ CPU hay không.
 - [ ] Sau khi chạy B: theo dõi CPU host và thời gian job browser. Nếu job bị timeout, giảm `maxRunners` về 24–30.
