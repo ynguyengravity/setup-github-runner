@@ -222,7 +222,41 @@ RAM (còn trống khoảng 185 GiB) và disk (`local-lvm2` còn khoảng 2392 GB
 - Hệ quả: job browser chạy chậm hơn rõ rệt khi cụm đầy. ⚠️ Chưa đo thời gian job lúc đầy (mục 2). Nếu job bị timeout, giảm `maxRunners`.
 - ✅ Ngay sau đó (23/10), `kubectl top nodes` cho thấy RAM dùng thật trên worker chỉ 3,3–4,8 GiB (19–27%) và CPU 0,7–2,1 core. Không có sự kiện `OOMKilled` hay `Evicted` nào. RAM không phải giới hạn; con số 100% trên Proxmox chỉ là RAM mà VM đã chiếm trên host.
 
-**Phương án B cho 40 runner** (chốt ngày 2026-10-23):
+**So sánh thời gian job với LXC cũ** (✅ 2026-10-23, `gh api` các run của repo screenshot, chỉ tính job `process-chunks` xanh, số là median):
+
+| Runner | Cả job | Install browsers | Process chunk |
+| --- | --- | --- | --- |
+| LXC cũ (5 run, mỗi run 45–78 job, `max-parallel: 10`) | 3,0–5,1 phút | **0,3 phút** | **1,9–3,8 phút** |
+| ARC, run `39877200718` (image `vn-gaqc-runner`, cụm đầy 40 runner, `cpuunits 50`) | 16,6 phút | **4,2 phút** | **8,7 phút** |
+| Runner của GitHub (`runOnExternal`), run `39790152263` | 4,1 phút | 0,8 phút | 2,4 phút |
+
+Nguyên nhân:
+
+1. **Install browsers:** `setup-browsers.sh` bỏ qua bước cài browser nếu đã có, nhưng lần nào cũng `apt update` rồi `apt install` khoảng 13 thư viện và khoảng 10 gói font. Riêng `fonts-noto-cjk` và `fonts-noto-cjk-extra` đã nặng vài trăm MB.
+    - LXC cũ là runner cố định, nên chỉ cài một lần.
+    - Pod ARC bị xoá sau mỗi job, nên job nào cũng tải lại.
+    - Cách sửa: đưa các gói này vào image (bản build sau ngày 23/10) và giữ lại apt lists.
+2. **Process chunk:** do thiếu CPU.
+    - Mỗi LXC cũ có 5 core, với mức ưu tiên ngang các VM khác.
+    - Phần lớn run screenshot trước đây lại chạy trên runner của GitHub: trong 40 run gần nhất trước 15:00 ngày 22/10, chỉ khoảng 1/5 chạy trên LXC.
+    - Ở ARC, `cpuunits 50` cộng với 40 job chạy cùng lúc khiến mỗi job chỉ được khoảng 0,3 thread.
+    - Proxmox chia CPU theo trọng số `cpuunits` của từng VM hoặc container khi host bận:
+        - LXC cũ: 36 LXC × 100 so với 7 VM khác × 100, tức runner giành **khoảng 84%** CPU.
+        - ARC với 3 worker × 50: chỉ khoảng 18%.
+
+**Phương án C – giữ 40 runner** (chốt ngày 2026-10-23, ⚠️ đang triển khai):
+
+| Thay đổi | Mục đích |
+| --- | --- |
+| Image có sẵn font và thư viện | Install browsers từ khoảng 4,2 phút xuống khoảng 0,3 phút |
+| `cpuunits` worker 300 | Cụm giành khoảng 4×300 / (1200 + 700) ≈ 63% CPU khi host bận. Nếu vẫn chậm, tăng lên 1000 (khoảng 85%, gần bằng LXC cũ), nhưng khi đó `Maintain-Local` gần như hết CPU |
+| Thêm worker 214 (`.7`), 4 × 12 vCPU / 32 GiB / 150 GB | 48 vCPU để cụm dùng được gần hết 32 thread khi được ưu tiên; mỗi worker khoảng 10 pod |
+| Limit RAM runner và dind 4 GiB | Chrome có thêm chỗ; RAM host còn dư |
+| `maxRunners: 40` | Giữ nguyên |
+
+Kỳ vọng: 40 job browser cùng lúc được khoảng 0,8 thread mỗi job, nên Process chunk khoảng 3–4 phút. Đo lại sau khi triển khai.
+
+**Phương án B cho 40 runner** (chốt ngày 2026-10-23; sau đó thay bằng phương án C ở trên):
 
 | | Giá trị |
 | --- | --- |
@@ -245,7 +279,7 @@ Mọi workflow dùng `runs-on: vn-gaqc-docker`, nên không phải sửa gì khi
 | Repo | Workflow / job | Đặc thù | Đã kiểm tra |
 | --- | --- | --- | --- |
 | `Gravity-Global/gg-ai-command-center-app` | `quality-gate.yml` → reusable `Gravity-Global/gravity-workflows-github-action-vn-team/.github/workflows/sonarqube-quality-gate.yml@production`, job `SonarQubeQualityGateCheck / SonarQube-Scan` | Job nhẹ, chạy ngay khi cài scale set (2 job đầu tiên) | 2026-10-22 ✅ |
-| `Gravity-Global/gravity-jenkins-automation-screenshot-v2-10-2023` | `.github/workflows/tool.excel.sharepoint.template.yml`, các job `prepare`, `process-chunks (N)` | `NUMBER_OF_CHUNKS: 100` (khoảng 73 job/run), `max-parallel: ${{ inputs.runOnExternal && 100 \|\| 10 }}`. Các bước: Setup Hosts → Setup Node.js (18) → Cache `node_modules` → **Install browsers** (`.github/scripts/setup-browsers.sh`: gọi `apt`/`apt-key` **không có sudo**, có `\|\| true` nên lỗi vẫn báo xanh) → Download artifact → `npm run step4-process-chunk N` (Selenium + Chrome local, BrowserStack Local, upload S3 `9w-internal-screenshot`). Secret: AWS, BrowserStack | 2026-10-22 ✅. Khoảng 8 phút/job, riêng Install browsers khoảng 6 phút khi chưa có image có sẵn browser |
+| `Gravity-Global/gravity-jenkins-automation-screenshot-v2-10-2023` | `.github/workflows/tool.excel.sharepoint.template.yml`, các job `prepare`, `process-chunks (N)`. ✅ Phần lớn run trước 22/10 dùng `runOnExternal` (chạy trên runner của GitHub); chỉ một phần chạy trên LXC | `NUMBER_OF_CHUNKS: 100` (khoảng 73 job/run), `max-parallel: ${{ inputs.runOnExternal && 100 \|\| 10 }}`. Các bước: Setup Hosts → Setup Node.js (18) → Cache `node_modules` → **Install browsers** (`.github/scripts/setup-browsers.sh`: gọi `apt`/`apt-key` **không có sudo**, có `\|\| true` nên lỗi vẫn báo xanh) → Download artifact → `npm run step4-process-chunk N` (Selenium + Chrome local, BrowserStack Local, upload S3 `9w-internal-screenshot`). Secret: AWS, BrowserStack | 2026-10-22 ✅. Khoảng 8 phút/job, riêng Install browsers khoảng 6 phút khi chưa có image có sẵn browser |
 | `Gravity-Global/gravity-jenkins-automation-check-console-04-2022` | `.github/workflows/tool.excel.sharepoint.template.yml`: `prepare-and-chunk` (trên `ubuntu-latest`), `process-chunks` và `merge-upload-summary` (trên `vn-gaqc-docker`) | `max-parallel: 10`. **Dùng `docker compose`**: service `crawler` = `mcr.microsoft.com/playwright:v1.63.0-noble`, `network_mode: host`, mount `.:/app` và `/etc/hosts:/etc/hosts:ro`. Bước xử lý chạy Xvfb + Chrome **có giao diện** (`--headless false`) bên trong dind | 2026-10-22 ✅ |
 
 Các điểm dùng chung giữa các workflow:
@@ -295,6 +329,13 @@ Xem lịch sử Helm: `helm history vn-gaqc-docker -n arc-runners` và `helm his
 - [ ] Xoá các runner `github-runner-*` còn Offline trên GitHub (Org → Settings → Actions → Runners).
 - [x] Phương án A (2026-10-22): 211 và 212 lên 10 vCPU (allocatable 9 CPU), `maxRunners: 18`, request 1 CPU/pod (Helm revision 5).
 - [x] Phương án B (2026-10-23): 3 worker × 12 vCPU / 20 GiB / 150 GB (allocatable 11 CPU), `cpuunits 50`, request 0,7 CPU/pod, `maxRunners: 40`.
+- [ ] Phương án C (mục 1.9):
+    1. Build lại image (có font và thư viện).
+    2. `resize-worker.sh` 211/212/213 lên RAM 32 GiB.
+    3. Tạo 214 (`.7`) và `join-worker.sh`.
+    4. `qm set 211/212/213/214 --cpuunits 300`.
+    5. `helm upgrade` với tag mới, limit RAM 4 GiB, `maxRunners: 40`.
+    6. Đo lại một run screenshot. Mục tiêu: Install browsers dưới 1 phút, Process chunk khoảng 3–4 phút. Khi cụm đầy, chạy `vmstat 5 3` trên worker và xem cột `st` (CPU steal) để biết job còn chờ CPU hay không.
 - [ ] Sau khi chạy B: theo dõi CPU host và thời gian job browser. Nếu job bị timeout, giảm `maxRunners` về 24–30.
 - [ ] (Tuỳ chọn) Dọn swap của host lúc rảnh: `swapoff -a && swapon -a`.
 - [ ] Nếu cần nhiều hơn khoảng 18 job browser chạy cùng lúc: chọn giữa thêm host, dời `Maintain-Local`, `runOnExternal`, hoặc chạy headless (mục 1.9).
@@ -459,6 +500,7 @@ Mỗi worker 12 vCPU / 20 GiB thêm khoảng 15 slot (request 0,7 CPU/pod). Cậ
 | IP tĩnh `192.168.8.2`–`.5` | `dhcpd` của host cấp `.10`–`.11.254`. Kế hoạch đầu tiên dùng `.201/.211/.212/.220` nằm trong dải DHCP nên đã đổi | IP trong dải DHCP |
 | Storage `local-lvm2` (thick) | `local-lvm` (thin) chỉ còn khoảng 40 GB | |
 | 2 worker 8 vCPU / 16 GiB, `maxRunners: 8` (lúc đầu) | CPU host đã bận 73–89%, RAM cấp phát đã gấp 3,6 lần RAM vật lý | 4 worker 16 vCPU / 32 GiB, 100 runner |
+| Phương án C: giữ 40 runner, `cpuunits 300`, 4 worker × 12 vCPU / 32 GiB, limit RAM 4 GiB (23/10) | Người vận hành muốn giữ 40. LXC cũ nhanh vì 36 LXC cùng trọng số giành khoảng 84% CPU. `cpuunits` cao là cách tái tạo điều đó | 40 + `cpuunits 50` (quá chậm); giảm về 24 runner (người vận hành không chọn) |
 | Phương án B: 3 worker × 12 vCPU, request 0,7 CPU/pod, `maxRunners: 40`, `cpuunits 50` | Cho nhiều run hoặc repo chạy cùng lúc mà không phải chờ; RAM và disk dư nhiều; 3 worker giúp hỏng một worker chỉ mất khoảng 1/3 job; `cpuunits` bảo vệ các VM khác | 2 worker × 16 vCPU (hỏng một worker mất khoảng 20 job); 4 worker × 10 vCPU (tốn thêm IP và phần reserved) |
 | Phương án A: worker 10 vCPU, request 1 CPU/pod, `maxRunners: 18` | Job browser dùng khoảng 1,2 thread; cụm chỉ có khoảng 18 thread thật (mục 1.9). Request sát thực tế giúp scheduler không nhồi quá tải, job dư xếp hàng | `maxRunners` 70–100 với request 0,5 CPU: job chậm gấp 4–5 lần, dễ timeout, tổng thời gian chạy không giảm |
 | Scale set tên `vn-gaqc-docker` ngay từ đầu, dừng LXC trước khi cài | Workflow không phải sửa; không có lúc nào cả LXC lẫn scale set cùng nhận job | Chạy thử với tên tạm |
@@ -501,6 +543,7 @@ Request/limit của mỗi runner pod (phương án B): runner 200m CPU / 512Mi (
 | Job `screenshot` lỗi `Initialize Browser: Server terminated early with status 127` | `.github/scripts/setup-browsers.sh` của repo gọi `apt-key`/`apt` không có `sudo` → `E: This command can only be used by root`, Chrome không được cài (bước vẫn xanh vì `\|\| true`), chromedriver thoát 127 | Container runner chạy bằng root như LXC cũ: `runAsUser: 0` + `RUNNER_ALLOW_RUNASROOT=1` ([k8s/runner-values.yaml](../k8s/runner-values.yaml)). Lâu dài: image có sẵn browser để khỏi cài lại mỗi job |
 | Sau khi chạy root, action `setup-hosts` lỗi `root is not in the sudoers file` | Image `actions-runner` ghi đè `/etc/sudoers` chỉ còn dòng `%sudo`, mất dòng `root` | ConfigMap `runner-sudoers` ([k8s/runner-sudoers.yaml](../k8s/runner-sudoers.yaml)) mount vào `/etc/sudoers` của container runner (subPath, mode 0440) |
 | `resize-worker.sh` báo xong nhưng allocatable vẫn cũ; bản sau thì kẹt ở "Chờ ... Ready" | Bản 1: chờ Ready quá sớm, đọc phải trạng thái cũ. Bản 2: tham số jsonpath có `( )` và `"` bị shell trên server phân tích sai khi chạy `kubectl` qua SSH | Chờ bootID của node thay đổi rồi kiểm tra `nproc`; quote từng tham số bằng `printf %q` trước khi gửi qua SSH. Nếu bị kẹt giữa chừng, node còn cordon: `kubectl uncordon <node>` |
+| Job screenshot trên ARC chậm khoảng 4 lần so với LXC cũ (16,6 phút so với 3–5 phút mỗi job) | (1) `setup-browsers.sh` cài lại font và thư viện ở mỗi job vì pod bị xoá sau mỗi job. (2) `cpuunits 50` cộng 40 job cùng lúc, mỗi job chỉ còn khoảng 0,3 thread | (1) Đưa font và thư viện vào image `vn-gaqc-runner`. (2) Phương án C: `cpuunits 300`, thêm worker 214, giữ 40 runner. Đo lại theo mục 1.9 |
 | Dán HTML nguồn của trang GitHub để lấy thông tin | | Không dán HTML nguồn (có giá trị gắn với phiên đăng nhập). Chụp màn hình hoặc copy chữ |
 
 ---

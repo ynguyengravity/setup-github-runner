@@ -13,7 +13,7 @@ set -uo pipefail
 
 SERVER=${SERVER:-ubuntu@192.168.8.2}
 MIRROR=${MIRROR:-ubuntu@192.168.8.5}
-VMIDS=${VMIDS:-"9000 201 211 212 213 220"}
+VMIDS=${VMIDS:-"9000 201 211 212 213 214 220"}
 
 hdr() { echo; echo "===== $* ====="; }
 srv() { ssh -o BatchMode=yes -o ConnectTimeout=5 "$SERVER" "$@" 2>&1; }

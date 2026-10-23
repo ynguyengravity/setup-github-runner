@@ -71,10 +71,24 @@ RUN curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o /tmp/
 # thêm lại dòng root để action gọi `sudo ...` vẫn chạy
 RUN echo 'root ALL=(ALL:ALL) NOPASSWD:ALL' >> /etc/sudoers && visudo -c
 
+# Thư viện + font mà .github/scripts/setup-browsers.sh của repo screenshot cài ở MỖI job.
+# LXC cũ là runner cố định nên chỉ cài một lần; pod ARC bị xoá sau mỗi job nên phải có sẵn trong image,
+# nếu không mỗi job tải lại vài trăm MB (fonts-noto-cjk*) -> bước Install browsers mất ~4 phút thay vì ~0,3.
+# Giữ /var/lib/apt/lists ở cuối để `apt update` trong job chỉ tải phần thay đổi.
+RUN apt-get update \
+ && apt-get install -y \
+      xvfb libxss1 libgtk-3-0t64 libnss3 libdrm2 libgbm1 libxshmfence1 libasound2t64 \
+      libatk-bridge2.0-0t64 libatspi2.0-0t64 libxdamage1 libxcomposite1 libu2f-udev \
+      fontconfig fonts-noto-cjk fonts-noto-cjk-extra fonts-ipafont-gothic fonts-ipafont-mincho \
+      fonts-wqy-zenhei fonts-thai-tlwg fonts-kacst fonts-noto-color-emoji fonts-freefont-ttf \
+ && fc-cache -f >/dev/null
+
 # Kiểm tra nhanh lúc build: thiếu công cụ nào thì build lỗi ngay
 RUN google-chrome --version && microsoft-edge --version && firefox --version \
  && node --version && npm --version && npx playwright --version \
  && openvpn --version | head -1 && docker compose version && aws --version \
- && sudo -n true
+ && sudo -n true \
+ && fc-list :lang=ja | grep -q . \
+ && apt-get update >/dev/null
 
 USER runner
