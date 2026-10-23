@@ -6,7 +6,7 @@ Phần k3s + ARC nằm ở nhánh `v2` (`docs/proxmox-k3s-arc-guide.md`).
 **Quy ước:** ✅ = đã kiểm chứng (ghi ngày + bằng chứng) · ⚠️ = chưa kiểm chứng / cần kiểm tra lại.
 Không ghi điều chưa kiểm chứng như sự thật. Khi đổi code/config, cập nhật file này trong cùng commit.
 
-Cập nhật lần cuối: 2026-10-23.
+Cập nhật lần cuối: 2026-10-23 ~18:10 (sau lượt timer 18:00).
 
 ---
 
@@ -25,15 +25,17 @@ Cập nhật lần cuối: 2026-10-23.
 |---|---|
 | Gói trên host | ✅ `lxc-runner-tools 0.0.4` đã cài (2026-10-23 ~17:00, output `apt install` + `lxc-runner version`) |
 | Timer recycle | ✅ bật, chạy mỗi 15 phút (`systemctl list-timers` 2026-10-23 16:47: last 16:45, next 17:00) |
-| Số runner | ✅ 31 LXC, VMID 101–131, tất cả `running` + `online` trên GitHub, disk 13–38% (`lxc-runner status` 2026-10-23 ~16:40) — sau test clone là 32 (xem dưới) |
+| **Số runner (mới nhất)** | ✅ **34** sau lượt timer 18:00 (journal `Xong: … added 2 … còn 34 runner`, 18:06:22): **đang chạy** 128, 132, 133, 134 (từ template 100) · **đang tắt** 30 runner `MAY` (101–127, 129–131) — user tự shutdown ~17:55 (`lxc-runner status`: `stopped`/`offline`; 102 GitHub vẫn báo `busy`) |
+| Chuyển đổi runner cũ → mới | ⏳ đang chạy tự động: lượt 18:00 đã ghi 30 LXC tắt vào `stopped.list`. Từ lượt 18:15, mỗi lượt **xóa + clone thay 1** runner cũ (`MAX_REBUILDS_PER_RUN=1`) và **fill +2** (`MAX_CLONES_PER_RUN=2`) tới 50. Ước tính: tổng 50 lúc ~19:45, xóa hết runner cũ ~01:30–02:00 ngày 24/10. 102 bị bỏ qua tới khi GitHub hết `busy`. Tăng tốc: mục 9 |
+| Số runner (trước đó) | ✅ 31 LXC, VMID 101–131, tất cả `running` + `online`, disk 13–38% (`lxc-runner status` 2026-10-23 ~16:40) → 32 sau test clone (xem dưới) |
 | `MAX_RUNNERS` trên host | ✅ 50 (dòng `Runners: 31 / max 50`) |
 | `DRY_RUN` trên host | ✅ `0` — timer **chạy thật** (dọn / rebuild / xóa LXC tắt) (`grep` config, 2026-10-23 ~17:50) |
-| `FILL_TO_MAX` trên host | ✅ `1`, `MAX_CLONES_PER_RUN=2`, `MAX_RUNNERS=50` (`grep` config, 2026-10-23 ~17:55) → mỗi lượt timer clone thêm 2 cho tới 50 (từ 32: ~9 lượt). ⚠️ chưa kiểm tra storage `local-lvm2` đủ cho +18 × 25G và tải CPU |
+| `FILL_TO_MAX` trên host | ✅ `1`, `MAX_CLONES_PER_RUN=2`, `MAX_RUNNERS=50` (`grep` config, 2026-10-23 ~17:55). ✅ chạy thật lúc 18:00: clone 133, 134, cả hai online, lượt mất ~5,7 phút (journal). ⚠️ chưa kiểm tra storage `local-lvm2` đủ cho tới 50 × 25G và tải CPU |
 | `SOURCE_CONTAINER_ID` (template) | ✅ `100` (2026-10-23 ~17:35, `grep` config + `pct list`) |
 | Template 100 | ✅ build lại bằng 0.0.4, `github-runner-100-20261023`, 3 core / 16384 MiB / 25G `local-lvm2` (`pct config 100`). ✅ Docker `active` + `hello-world` chạy; Chrome 156.0.8078.47, Edge 156.0.4314.42, Firefox 158.0.1, Node v24.22.1, Playwright 1.64.1, AWS CLI 2.38.5; tarball runner 2.338.0; chưa có `.runner` (kiểm tra bằng `pct exec 100`, 2026-10-23 ~17:40). Lần build trước bằng 0.0.3 lỗi ở bước Docker (✅ `Unit docker.service not found`); nguyên nhân nghi do `DRY_RUN` lọt vào container (mục 8) — ⚠️ chưa chạy lệnh xác nhận |
 | Clone từ template 100 | ✅ 2026-10-23 17:34–17:40 (output lệnh): `recycle` ép ngưỡng trên LXC 128 → drain, dọn, clone **132** (`github-runner-132-20261023`), chờ online OK, xóa 128 — ~3 phút, copy ~6,1 GB/clone. Sau đó `lxc-runner clone 1` tạo lại **128** (`github-runner-128-20261023`, VMID dùng lại) |
 | Runner sau test | ✅ 32 (theo output): 30 runner `MAY` (101–127, 129–131) + 2 runner từ template 100 (128, 132). ✅ `github-runner-128-20261023` và `github-runner-132-20261023` **Idle** trên GitHub, group `VN-Team`, labels `self-hosted, X64, Linux, vn-gaqc-docker, test-setup` (ảnh chụp trang Runners của org, 2026-10-23 ~17:45). ⚠️ chưa xác nhận runner cũ `github-runner-128-20261023MAY` đã biến mất khỏi danh sách |
-| Nguồn gốc 31 runner | ⚠️ tên dạng `github-runner-1xx-20261023MAY` — hậu tố `MAY` **không** do script trong repo tạo; cấu hình (cores/RAM/disk) chưa kiểm tra |
+| Nguồn gốc 30 runner `MAY` | ⚠️ tên dạng `github-runner-1xx-20261023MAY` — hậu tố `MAY` **không** do script trong repo tạo; cấu hình chưa kiểm tra. Đang bị thay dần (dòng "Chuyển đổi") |
 | OS host | ✅ Debian 13 (libc `2.41-12+deb13u4` trong output apt, 2026-10-23) |
 | OS trong container | ✅ Ubuntu 24.04 (libc `2.39-0ubuntu8.9` trong output build template) |
 | ARC (nhánh `v2`) | ⚠️ theo ghi chú 2026-10-23 sáng: k3s + ARC đang chạy, scale set `vn-gaqc-docker`, maxRunners 40. Chưa kiểm tra lại song song với 31 LXC |
@@ -137,6 +139,17 @@ Chỉ xét LXC tên khớp `LXC_NAME_PATTERN`, **trừ** template `SOURCE_CONTAI
 
 **Bù số lượng** — `FILL_TO_MAX=1` và tổng < `MAX_RUNNERS`: cuối lượt clone thêm ≤ `MAX_CLONES_PER_RUN` (kiểm tra storage trước mỗi clone). Bỏ qua khi đặt `LXC_IDS`.
 
+**Giới hạn mỗi lượt** (theo loại hành động, không phải "1 việc mỗi lượt"):
+
+| Hành động | Giới hạn | Mặc định |
+|---|---|---|
+| Fill (tạo mới cho đủ max) | `MAX_CLONES_PER_RUN` | 2 |
+| Rebuild / thay thế (đầy disk, hoặc LXC tắt khi tổng ≤ max) | `MAX_REBUILDS_PER_RUN` | 1 |
+| Xóa không thay (tổng > max) | không giới hạn | — |
+| Dọn disk | không giới hạn | — |
+
+Mỗi clone ~3 phút (copy ~6,1 GB). Lượt dài hơn 15 phút thì các lượt trùng giờ tự bỏ qua (lock). `lxc-runner clone N` chạy tay không bị giới hạn mỗi lượt.
+
 **Xóa LXC** = `DELETE /orgs/Gravity-Global/actions/runners/{id}` + `pct stop` + `pct destroy --purge` (xóa config, rootfs trên `local-lvm2`, khỏi backup/replication/HA).
 
 **Không bao giờ:** tự bật LXC đang tắt; xóa runner thừa khi disk chưa đầy; đụng template / LXC có tag skip / VM khác.
@@ -153,7 +166,16 @@ Chạy thử một vòng đầy đủ trên 1 runner rảnh:
 
 ## 9. Việc còn mở / rủi ro
 
-- 30 runner `MAY` **không** được clone từ template 100 (cấu hình ⚠️ chưa rõ). Muốn đồng bộ: rebuild dần từng runner rảnh bằng `DRY_RUN=0 DISK_THRESHOLD=1 CLEAN_TARGET=1 LXC_IDS=<id> lxc-runner recycle` (~3 phút/runner).
+- ⏳ **Chuyển đổi 30 runner `MAY` (đang tắt)** — timer tự làm, chậm (~1/lượt). Tăng tốc, chọn một:
+  - sửa env `MAX_REBUILDS_PER_RUN=5` (xóa + thay 5/lượt), xong đặt lại `1`;
+  - hoặc xóa hết ngay, không thay (khi `systemctl is-active lxc-runner-recycle.service` = `inactive`):
+    ```bash
+    IDS=$(pct list | awk '$2=="stopped" && $NF ~ /MAY$/ {print $1}' | paste -sd, -)
+    DRY_RUN=0 MAX_RUNNERS=0 LXC_IDS="$IDS" lxc-runner recycle
+    ```
+    rồi fill bù (+2/lượt) hoặc `lxc-runner clone N`.
+  - 102 (`busy` trên GitHub dù đã tắt — job bị cắt khi shutdown): chờ GitHub hết busy, hoặc `pct destroy 102 --purge` + xóa runner trên trang Runners.
+- Log: `[237B blob data]` trong journal là progress bar của `curl` trong `clone.sh` (có thể thêm `-s`). `memory peak ~12G` của service là page cache do rsync khi clone, không phải RAM bị giữ.
 - ⚠️ **Trùng label với ARC**: `RUNNER_LABELS` chứa `vn-gaqc-docker` = tên scale set ARC → job chia giữa LXC và ARC nếu ARC còn chạy. (Đã quyết định để nguyên — 2026-10-23.)
 - ⚠️ **Tải CPU**: 31 LXC + ARC trên 32 thread. `MAX_RUNNERS=50` + `FILL_TO_MAX=1` sẽ clone thêm 19. Đo `uptime` trước khi tăng.
 - ⚠️ **Docker `iptables:false`** trong container: Docker network có thể không có NAT ra ngoài. Chưa test (đã quyết định bỏ qua — 2026-10-23).
