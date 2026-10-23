@@ -9,6 +9,10 @@
 #   4. số runner > MAX_RUNNERS → gỡ đăng ký + xóa container, không clone thêm
 #   5. dọn (docker prune, _work, apt, journal) → disk < CLEAN_TARGET thì trả runner về
 #   6. còn đầy → clone runner mới từ template, gỡ đăng ký + xóa container cũ
+#
+# Container đang tắt (2 lượt liên tiếp, không bị lock, có runner trên GitHub):
+#   gỡ đăng ký + xóa; tổng <= MAX_RUNNERS thì clone thay.
+# Cuối lượt: FILL_TO_MAX=1 và tổng < MAX_RUNNERS → clone thêm (tối đa MAX_CLONES_PER_RUN).
 
 set -uo pipefail
 
@@ -36,11 +40,17 @@ DRAIN_WAIT="${DRAIN_WAIT:-20}"              # giây chờ sau khi gỡ labels
 ONLINE_WAIT="${ONLINE_WAIT:-180}"           # giây chờ runner mới online
 STORAGE_MARGIN_GB="${STORAGE_MARGIN_GB:-10}"
 PCT_STORAGE="${PCT_STORAGE:-local-lvm2}"
+FILL_TO_MAX="${FILL_TO_MAX:-0}"             # 1 = clone thêm cho đủ MAX_RUNNERS
+MAX_CLONES_PER_RUN="${MAX_CLONES_PER_RUN:-2}"
 
-REBUILT=0 REMOVED=0 CLEANED=0 SKIPPED_BUSY=0 FAILED=0
-RUNNER_TOTAL=0   # số runner container hiện có (giảm dần khi xóa trong lượt này)
+REBUILT=0 REMOVED=0 CLEANED=0 ADDED=0 SKIPPED_BUSY=0 FAILED=0
+RUNNER_TOTAL=0   # số runner container hiện có (cập nhật khi xóa/clone trong lượt này)
 RUNNERS='[]'
 SAVED_LABELS='[]'
+# Container thấy đang tắt ở lượt trước / lượt này (chỉ xử lý khi tắt 2 lượt liên tiếp)
+STOPPED_FILE="$LXC_RUNNER_STATE/stopped.list"
+STOPPED_PREV=" $(cat "$STOPPED_FILE" 2>/dev/null | tr '\n' ' ') "
+STOPPED_NOW=""
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -205,10 +215,134 @@ rebuild() {
 
 # ── Per-container ──────────────────────────────────────────────────────────
 
+# Container đang tắt: gỡ đăng ký + xóa; tổng <= MAX_RUNNERS thì clone thay.
+# Chỉ xử lý khi đã tắt từ lượt trước, không bị lock, và có runner cùng tên trên GitHub
+# (không exec vào container tắt được để kiểm tra .runner — tránh xóa nhầm template cũ).
+process_stopped() {
+    local vmid="$1" name="$2" lock="$3" runner new_name
+
+    if [ "$lock" != "-" ]; then
+        info "[$vmid] $name: stopped, đang bị lock '$lock' — bỏ qua"
+        return 0
+    fi
+    if [[ "$STOPPED_PREV" != *" $vmid:$name "* ]]; then
+        STOPPED_NOW+="$vmid:$name "
+        warn "[$vmid] $name: stopped — xử lý nếu lượt sau vẫn tắt"
+        return 0
+    fi
+
+    runner=$(jq -c --arg n "$name" 'map(select(.name == $n)) | first // empty' <<< "$RUNNERS")
+    if [ -z "$runner" ]; then
+        STOPPED_NOW+="$vmid:$name "
+        warn "[$vmid] $name: stopped nhưng không có runner cùng tên trên GitHub — không xóa (kiểm tra tay)"
+        return 0
+    fi
+    if [ "$(jq -r '.busy' <<< "$runner")" = "true" ]; then
+        STOPPED_NOW+="$vmid:$name "
+        warn "[$vmid] $name: stopped nhưng GitHub báo busy — bỏ qua"
+        return 0
+    fi
+
+    local over_max=0
+    if [ -n "$MAX_RUNNERS" ] && [ "$RUNNER_TOTAL" -gt "$MAX_RUNNERS" ]; then
+        over_max=1
+    fi
+    if [ "$over_max" = "0" ] && [ "$REBUILT" -ge "$MAX_REBUILDS_PER_RUN" ]; then
+        STOPPED_NOW+="$vmid:$name "
+        warn "[$vmid] $name: stopped — chờ lượt rebuild sau (giới hạn mỗi lượt)"
+        return 0
+    fi
+
+    if [ "$DRY_RUN" = "1" ] || ! in_rebuild_window; then
+        local why="[DRY-RUN]"
+        [ "$DRY_RUN" = "1" ] || why="ngoài khung giờ ${REBUILD_HOURS}, lượt sau"
+        STOPPED_NOW+="$vmid:$name "
+        if [ "$over_max" = "1" ]; then
+            info "[$vmid] $name: stopped — ${why} sẽ xóa, không clone (${RUNNER_TOTAL} > max ${MAX_RUNNERS})"
+        else
+            info "[$vmid] $name: stopped — ${why} sẽ xóa + clone thay"
+        fi
+        return 0
+    fi
+
+    warn "[$vmid] $name: stopped 2 lượt liên tiếp — xóa"
+    if ! destroy_ct "$vmid" "$runner"; then
+        notify "❌ LXC remove FAILED | ${vmid} (${name}) đang tắt"
+        FAILED=$((FAILED + 1))
+        return 0
+    fi
+    RUNNER_TOTAL=$((RUNNER_TOTAL - 1))
+
+    if [ "$over_max" = "1" ]; then
+        REMOVED=$((REMOVED + 1))
+        notify "🗑️ LXC removed | ${vmid} (${name}) đang tắt | còn ${RUNNER_TOTAL}/${MAX_RUNNERS} runner"
+        return 0
+    fi
+
+    if ! clone_new; then
+        notify "❌ LXC replace FAILED | đã xóa ${vmid} (${name}) đang tắt nhưng clone lỗi — thiếu 1 runner"
+        FAILED=$((FAILED + 1))
+        return 0
+    fi
+    RUNNER_TOTAL=$((RUNNER_TOTAL + 1))
+    REBUILT=$((REBUILT + 1))
+    new_name=$(pct config "$NEW_ID" | awk '/^hostname:/ {print $2}')
+    wait_online "$new_name" ||
+        notify "⚠️ LXC replace | runner mới ${NEW_ID} (${new_name}) chưa online sau ${ONLINE_WAIT}s"
+    notify "♻️ LXC replaced | ${vmid} (${name}) đang tắt → ${NEW_ID} (${new_name})"
+}
+
+# FILL_TO_MAX: clone thêm cho đủ MAX_RUNNERS (tối đa MAX_CLONES_PER_RUN mỗi lượt)
+fill_to_max() {
+    local missing n i new_name
+    [ "$FILL_TO_MAX" = "1" ] && [ -n "$MAX_RUNNERS" ] || return 0
+    if [ -n "$LXC_IDS" ]; then
+        info "Fill: bỏ qua vì đang giới hạn LXC_IDS"
+        return 0
+    fi
+
+    missing=$((MAX_RUNNERS - RUNNER_TOTAL))
+    [ "$missing" -gt 0 ] || return 0
+    n=$(( missing < MAX_CLONES_PER_RUN ? missing : MAX_CLONES_PER_RUN ))
+
+    if [ "$DRY_RUN" = "1" ]; then
+        info "Fill: [DRY-RUN] thiếu ${missing} runner (${RUNNER_TOTAL}/${MAX_RUNNERS}) — sẽ clone thêm ${n}"
+        return 0
+    fi
+    if ! in_rebuild_window; then
+        info "Fill: thiếu ${missing} runner — ngoài khung giờ ${REBUILD_HOURS}, chờ lượt sau"
+        return 0
+    fi
+
+    info "Fill: thiếu ${missing} runner (${RUNNER_TOTAL}/${MAX_RUNNERS}) — clone thêm ${n}"
+    for ((i = 1; i <= n; i++)); do
+        if ! storage_allows_clone_first; then
+            warn "Fill: storage ${PCT_STORAGE} không đủ chỗ — dừng"
+            break
+        fi
+        if ! clone_new; then
+            notify "❌ LXC fill FAILED | clone lỗi (${RUNNER_TOTAL}/${MAX_RUNNERS})"
+            FAILED=$((FAILED + 1))
+            break
+        fi
+        RUNNER_TOTAL=$((RUNNER_TOTAL + 1))
+        ADDED=$((ADDED + 1))
+        new_name=$(pct config "$NEW_ID" | awk '/^hostname:/ {print $2}')
+        wait_online "$new_name" ||
+            warn "Fill: runner mới ${NEW_ID} (${new_name}) chưa online sau ${ONLINE_WAIT}s"
+    done
+    [ "$ADDED" -gt 0 ] && notify "➕ LXC fill | clone thêm ${ADDED} → ${RUNNER_TOTAL}/${MAX_RUNNERS} runner"
+    return 0
+}
+
 process_ct() {
-    local vmid="$1" name="$2" status="$3" disk="$4" maxdisk="$5"
+    local vmid="$1" name="$2" status="$3" lock="$4" disk="$5" maxdisk="$6"
     local pct_used runner after rc
 
+    if [ "$status" = "stopped" ]; then
+        process_stopped "$vmid" "$name" "$lock"
+        return 0
+    fi
     if [ "$status" != "running" ]; then
         info "[$vmid] $name: $status — bỏ qua"
         return 0
@@ -310,10 +444,9 @@ process_ct() {
 require_root
 require_token
 
-mkdir -p "$LXC_RUNNER_STATE"
-exec 9> "$LXC_RUNNER_STATE/recycle.lock"
-if ! flock -n 9; then
-    info "Lần chạy trước chưa xong — bỏ qua"
+# Shared with `lxc-runner clone/template`: never act while a clone is half-done
+if ! lock_or_skip; then
+    info "Đang có recycle/clone/template khác chạy — bỏ qua lượt này"
     exit 0
 fi
 
@@ -337,9 +470,16 @@ if [ -n "$LXC_IDS" ]; then
 fi
 
 # Read the list on fd 3: pct exec inside the loop would otherwise consume stdin
-while IFS=$'\t' read -r vmid name status disk maxdisk <&3; do
-    process_ct "$vmid" "$name" "$status" "$disk" "$maxdisk"
-done 3< <(jq -r '.[] | [.vmid, .name, .status, (.disk | floor), (.maxdisk | floor)] | @tsv' <<< "$CTS")
+# Empty lock → "-": consecutive tabs would collapse into one field in `read`
+while IFS=$'\t' read -r vmid name status lock disk maxdisk <&3; do
+    process_ct "$vmid" "$name" "$status" "$lock" "$disk" "$maxdisk"
+done 3< <(jq -r '.[] | [.vmid, .name, .status, (if .lock == "" then "-" else .lock end),
+                        (.disk | floor), (.maxdisk | floor)] | @tsv' <<< "$CTS")
 
-info "Xong: rebuilt ${REBUILT}, removed ${REMOVED}, cleaned ${CLEANED}, bận ${SKIPPED_BUSY}, lỗi ${FAILED} — còn ${RUNNER_TOTAL} runner"
+fill_to_max
+
+# Remember containers still stopped for the next run (only when scanning all)
+[ -z "$LXC_IDS" ] && echo "$STOPPED_NOW" | tr ' ' '\n' | sed '/^$/d' > "$STOPPED_FILE"
+
+info "Xong: rebuilt ${REBUILT}, removed ${REMOVED}, added ${ADDED}, cleaned ${CLEANED}, bận ${SKIPPED_BUSY}, lỗi ${FAILED} — còn ${RUNNER_TOTAL} runner"
 [ "$FAILED" -eq 0 ]

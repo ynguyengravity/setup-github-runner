@@ -49,7 +49,15 @@ Với mỗi container khớp `LXC_NAME_PATTERN` (trừ template `SOURCE_CONTAINE
    - Storage đủ chỗ: clone mới → chờ online → gỡ đăng ký + xóa cũ. Lỗi thì giữ container cũ.
    - Không đủ: gỡ đăng ký + xóa cũ → clone mới.
 
-An toàn: `flock` chống chạy chồng; không đọc được GitHub API thì dừng; bỏ qua container không có `/root/actions-runner/.runner`.
+Container **đang tắt**: chỉ xử lý khi tắt 2 lượt timer liên tiếp, không bị Proxmox lock, và có runner cùng tên trên GitHub (để không xóa nhầm template cũ). Khi đó gỡ đăng ký + xóa; tổng ≤ `MAX_RUNNERS` thì clone thay.
+
+`FILL_TO_MAX=1`: cuối mỗi lượt, tổng < `MAX_RUNNERS` thì clone thêm (tối đa `MAX_CLONES_PER_RUN`).
+
+Bỏ qua hẳn một container (vd. cố ý tắt): `pct set <id> --tags lxc-runner-skip`.
+
+Clone dùng `config.sh --replace`: VMID vừa xóa có thể được dùng lại ngay, ra cùng tên runner trong ngày — `--replace` thay bản đăng ký cũ thay vì lỗi.
+
+An toàn: lock chung giữa `recycle`/`clone`/`template` (recycle không bao giờ thấy container clone dở); không đọc được GitHub API thì dừng; bỏ qua container không có `/root/actions-runner/.runner`.
 
 ## Build
 

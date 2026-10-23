@@ -14,8 +14,7 @@ err()  { echo "[$(date '+%F %T')] ERROR: $*" >&2; }
 # so `PCT_CORES=6 lxc-runner clone` overrides the file.
 load_config() {
     local line key value
-    [ -r "$LXC_RUNNER_CONFIG" ] || return 0
-    while IFS= read -r line || [ -n "$line" ]; do
+    [ -r "$LXC_RUNNER_CONFIG" ] && while IFS= read -r line || [ -n "$line" ]; do
         line="${line#"${line%%[![:space:]]*}"}"
         case "$line" in ''|'#'*) continue ;; esac
         [[ "$line" == *=* ]] || continue
@@ -107,15 +106,32 @@ gh_find_runner() {
 # Proxmox node name is the short hostname
 pve_node() { hostname -s; }
 
-# Runner containers on this node as JSON: [{vmid,name,status,disk,maxdisk}]
+# Runner containers on this node as JSON: [{vmid,name,status,lock,disk,maxdisk}]
+# Containers tagged SKIP_TAG (Proxmox tags) are left out entirely.
 pve_list_runner_cts() {
     pvesh get "/nodes/$(pve_node)/lxc" --output-format json |
-        jq -c --arg re "$LXC_NAME_PATTERN" --arg tpl "$SOURCE_CONTAINER_ID" '
+        jq -c --arg re "$LXC_NAME_PATTERN" --arg tpl "$SOURCE_CONTAINER_ID" \
+              --arg skip "${SKIP_TAG:-lxc-runner-skip}" '
             map(select((.name // "") | test($re)))
             | map(select((.vmid | tostring) != $tpl))
-            | map({vmid: (.vmid | tonumber), name, status,
+            | map(select((.tags // "") | split(";") | index($skip) | not))
+            | map({vmid: (.vmid | tonumber), name, status, lock: (.lock // ""),
                    disk: (.disk // 0), maxdisk: (.maxdisk // 0)})
             | sort_by(.vmid)'
+}
+
+# Serialize template/clone/recycle so recycle never sees a half-cloned container.
+# lock_or_wait: block until free; lock_or_skip: return 1 if busy.
+LOCK_FILE="$LXC_RUNNER_STATE/lxc-runner.lock"
+lock_or_wait() {
+    mkdir -p "$LXC_RUNNER_STATE"
+    exec 9> "$LOCK_FILE"
+    flock 9
+}
+lock_or_skip() {
+    mkdir -p "$LXC_RUNNER_STATE"
+    exec 9> "$LOCK_FILE"
+    flock -n 9
 }
 
 # Root filesystem usage in percent, measured inside the container

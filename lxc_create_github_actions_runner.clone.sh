@@ -175,7 +175,9 @@ pct exec $NEW_PCTID -- bash -c "
     rm -f ${GITHUB_RUNNER_FILE}
 
     echo '⚙️  Configuring runner...'
-    RUNNER_ALLOW_RUNASROOT=1 ./config.sh --unattended \
+    # --replace: a freed VMID can be reused on the same day, giving the same runner
+    # name as a destroyed container whose GitHub registration may still exist
+    RUNNER_ALLOW_RUNASROOT=1 ./config.sh --unattended --replace \
         --url ${RUNNER_URL} \
         --token ${RUNNER_TOKEN} \
         --name github-runner-${NEW_PCTID}-${CURRENT_DATE} \

@@ -31,6 +31,8 @@ EOF
 cmd_template() {
     require_root
     load_config
+    info "Chờ lock (recycle/clone khác đang chạy?)..."
+    lock_or_wait
     mkdir -p "$LXC_RUNNER_STATE/cache"
     cd "$LXC_RUNNER_STATE/cache"
     exec "$LXC_RUNNER_LIB/master.sh"
@@ -45,6 +47,8 @@ cmd_clone() {
     require_root
     load_config
     require_token
+    info "Chờ lock (recycle/clone khác đang chạy?)..."
+    lock_or_wait
     for ((i = 1; i <= n; i++)); do
         log "== Clone runner $i/$n"
         "$LXC_RUNNER_LIB/clone.sh" < /dev/null
